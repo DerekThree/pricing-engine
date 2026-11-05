@@ -28,12 +28,9 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.boot.SpringApplication;
-import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
-import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -57,6 +54,7 @@ class PricingServiceTests {
 
 	static final List<Long> COMPLETED_BEFORE_EVALUATION = new CopyOnWriteArrayList<>();
 	static volatile Runnable configurationRead = () -> {};
+	static volatile String januaryAmount = "2.50";
 	static final AtomicInteger WAKE_UPS = new AtomicInteger();
 	static HttpServer transactionProcessor;
 
@@ -80,9 +78,6 @@ class PricingServiceTests {
 	static void stopTransactionProcessor() {
 		transactionProcessor.stop(0);
 	}
-
-	@Autowired
-	ConfigurableApplicationContext context;
 
 	@Autowired
 	EngineService service;
@@ -118,6 +113,7 @@ class PricingServiceTests {
 		COMPLETED_BEFORE_EVALUATION.clear();
 		WAKE_UPS.set(0);
 		configurationRead = () -> {};
+		januaryAmount = "2.50";
 	}
 
 	@Test
@@ -127,8 +123,7 @@ class PricingServiceTests {
 		addAccount(batchId, "JAN", LocalDate.of(2026, 1, 15));
 		addAccount(batchId, "FEB", LocalDate.of(2026, 2, 15));
 
-		context.publishEvent(new ApplicationReadyEvent(new SpringApplication(
-				EngineApplication.class), new String[0], context, Duration.ZERO));
+		service.afterSingletonsInstantiated();
 
 		assertTrue(accounts.queryForObject(
 				"select processed from batch_outbox where batch_id = ?", Boolean.class, batchId));
@@ -193,7 +188,7 @@ class PricingServiceTests {
 	}
 
 	@Test
-	void startupAndDuplicateWakeUpsShareTheActiveRun() throws Exception {
+	void duplicateWakeUpsShareTheActiveRun() throws Exception {
 		UUID first = UUID.randomUUID();
 		UUID next = UUID.randomUUID();
 		accounts.update("insert into batch_outbox(batch_id, processed) values (?, false)", first);
@@ -211,12 +206,12 @@ class PricingServiceTests {
 				evaluating.get(5, TimeUnit.SECONDS);
 				accounts.update("insert into batch_outbox(batch_id, processed) values (?, false)", next);
 				addAccount(next, "NEXT", LocalDate.of(2026, 1, 15));
-				var startup = requests.submit(service::processPendingAccounts);
+				var processing = requests.submit(service::processPendingAccounts);
 				for (int i = 0; i < 8; i++) {
 					mockMvc.perform(post("/api/v1/work-available"))
 							.andExpect(status().isAccepted());
 				}
-				startup.get(2, TimeUnit.SECONDS);
+				processing.get(2, TimeUnit.SECONDS);
 			} finally {
 				resume.complete(null);
 			}
@@ -274,7 +269,7 @@ class PricingServiceTests {
 				configurationRead.run();
 				return new PriceConfig(Map.of("NY", new Branch("NY", "NY", "10001")),
 						List.of(new Region("EAST", Set.of("NY"), Set.of(), Set.of())), List.of(
-								plan("JANPLAN", 1, "2.50"), plan("FEBPLAN", 2, "3.50")));
+								plan("JANPLAN", 1, januaryAmount), plan("FEBPLAN", 2, "3.50")));
 			});
 			return repository;
 		}

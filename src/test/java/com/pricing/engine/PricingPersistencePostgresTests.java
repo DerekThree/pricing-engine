@@ -6,6 +6,8 @@ import java.math.BigDecimal;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.net.InetSocketAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
@@ -14,6 +16,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.DriverManager;
 import java.sql.SQLException;
+import java.sql.SQLTransientConnectionException;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.util.List;
@@ -46,6 +49,8 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -54,11 +59,15 @@ import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.TransientDataAccessException;
+import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.web.client.RestClient;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -70,6 +79,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doCallRealMethod;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -109,6 +119,7 @@ class PricingPersistencePostgresTests {
 		properties.add("transaction-processor.wake-up-url", () ->
 				"http://localhost:" + TRANSACTION_PROCESSOR.getAddress().getPort()
 						+ "/api/v1/mock/txn/wake");
+		properties.add("database.retry-delay", () -> "200ms");
 		properties.add("transaction-processor.retry-delay", () -> "50ms");
 		properties.add("transaction-processor.http-timeout", () -> "100ms");
 		properties.add("spring.datasource.url", POSTGRES::getJdbcUrl);
@@ -141,6 +152,9 @@ class PricingPersistencePostgresTests {
 	@MockitoSpyBean(name = "accountDataSource")
 	DataSource accountDataSource;
 
+	@MockitoSpyBean(name = "recommendationDataSource")
+	DataSource recommendationDataSource;
+
 	@Autowired
 	AccountRepository accountRepository;
 
@@ -161,6 +175,7 @@ class PricingPersistencePostgresTests {
 	@BeforeEach
 	void cleanUp() {
 		PricingServiceTests.configurationRead = () -> {};
+		PricingServiceTests.januaryAmount = "2.50";
 		PricingServiceTests.COMPLETED_BEFORE_EVALUATION.clear();
 		EMPTY_SCAN.set(null);
 		WAKE_UPS.clear();
@@ -181,6 +196,7 @@ class PricingPersistencePostgresTests {
 		await().during(Duration.ofMillis(500)).atMost(Duration.ofSeconds(3))
 				.until(() -> ACTIVE_REQUESTS.get() == 0);
 		PricingServiceTests.configurationRead = () -> {};
+		PricingServiceTests.januaryAmount = "2.50";
 		PricingServiceTests.COMPLETED_BEFORE_EVALUATION.clear();
 	}
 
@@ -188,6 +204,268 @@ class PricingPersistencePostgresTests {
 	static void stopTransactionProcessor() {
 		TRANSACTION_PROCESSOR.stop(0);
 		HTTP_EXECUTOR.close();
+	}
+
+	@ParameterizedTest
+	@ValueSource(ints = {0, 1, 2})
+	void retriesATemporaryAccountStoreFailure(int failedConnection) throws Exception {
+		UUID batchId = UUID.randomUUID();
+		addAccount(batchId);
+		AtomicInteger connections = new AtomicInteger();
+		doAnswer(invocation -> {
+			if (connections.getAndIncrement() == failedConnection) {
+				throw new SQLTransientConnectionException("Temporary outage", "08001");
+			}
+			return invocation.callRealMethod();
+		}).when(accountDataSource).getConnection();
+
+		service.processPendingAccounts();
+
+		assertTrue(accounts.queryForObject(
+				"select processed from batch_outbox where batch_id = ?", Boolean.class, batchId));
+		assertEquals(batchId, recommendations.queryForObject(
+				"select batch_id from recommendation_outbox", UUID.class));
+		assertEquals(1, PricingServiceTests.COMPLETED_BEFORE_EVALUATION.size());
+	}
+
+	@Test
+	void retriesConfigurationAccessBeforeCalculating() {
+		addAccount(UUID.randomUUID());
+		AtomicInteger reads = new AtomicInteger();
+		PricingServiceTests.configurationRead = () -> {
+			if (reads.getAndIncrement() == 0) {
+				throw new DataAccessResourceFailureException("Temporary configuration outage");
+			}
+		};
+
+		service.processPendingAccounts();
+
+		assertEquals(2, reads.get());
+		assertTrue(accounts.queryForObject("select processed from batch_outbox", Boolean.class));
+		assertEquals(new BigDecimal("2.50"), recommendations.queryForObject(
+				"select amount from fee_request_recommendations", BigDecimal.class));
+	}
+
+	@Test
+	void retriesAtomicStorageWithoutReloadingChangedConfiguration() throws Exception {
+		addAccount(UUID.randomUUID());
+		failRecommendationWrites(2);
+		AtomicInteger connections = new AtomicInteger();
+		doAnswer(invocation -> {
+			Connection connection = (Connection) invocation.callRealMethod();
+			if (connections.getAndIncrement() < 3) {
+				PricingServiceTests.januaryAmount = "9.99";
+				try (var statement = connection.createStatement();
+						var rows = statement.executeQuery(
+								"select count(*) from recommendation_batches")) {
+					rows.next();
+					assertEquals(0, rows.getInt(1));
+				}
+			}
+			return connection;
+		}).when(recommendationDataSource).getConnection();
+		try {
+			service.processPendingAccounts();
+
+			assertEquals(3L, recommendations.queryForObject(
+					"select last_value from recommendation_write_attempts", Long.class));
+			assertEquals(1, PricingServiceTests.COMPLETED_BEFORE_EVALUATION.size());
+			assertEquals("9.99", PricingServiceTests.januaryAmount);
+			assertEquals(new BigDecimal("2.50"), recommendations.queryForObject(
+					"select amount from fee_request_recommendations", BigDecimal.class));
+			assertEquals(1, recommendations.queryForObject(
+					"select count(*) from recommendation_outbox", Integer.class));
+			assertTrue(accounts.queryForObject("select processed from batch_outbox", Boolean.class));
+		} finally {
+			removeRecommendationWriteFailure();
+		}
+	}
+
+	@Test
+	void retainsResultsAfterStorageRetriesExhaustWithoutResubmittingInput() {
+		UUID batchId = UUID.randomUUID();
+		addAccount(batchId);
+		failRecommendationWrites(3);
+		try {
+			assertThrows(TransientDataAccessException.class, service::processPendingAccounts);
+			assertEquals(3L, recommendations.queryForObject(
+					"select last_value from recommendation_write_attempts", Long.class));
+			assertEquals(0, recommendations.queryForObject(
+					"select count(*) from recommendation_batches", Integer.class));
+			assertEquals(0, recommendations.queryForObject(
+					"select count(*) from recommendation_outbox", Integer.class));
+			assertFalse(accounts.queryForObject("select processed from batch_outbox", Boolean.class));
+			PricingServiceTests.januaryAmount = "9.99";
+		} finally {
+			removeRecommendationWriteFailure();
+			service.processPendingAccounts();
+		}
+		assertEquals(1, PricingServiceTests.COMPLETED_BEFORE_EVALUATION.size());
+		assertEquals(new BigDecimal("2.50"), recommendations.queryForObject(
+				"select amount from fee_request_recommendations", BigDecimal.class));
+		assertTrue(accounts.queryForObject("select processed from batch_outbox", Boolean.class));
+	}
+
+	@Test
+	void readRetryExhaustionStopsTheRunAndLeavesAllInputUnprocessed() throws Exception {
+		addAccount(UUID.randomUUID());
+		addAccount(UUID.randomUUID());
+		AtomicInteger attempts = new AtomicInteger();
+		doAnswer(invocation -> {
+			attempts.incrementAndGet();
+			throw new SQLTransientConnectionException("Temporary outage", "08001");
+		}).when(accountDataSource).getConnection();
+		try {
+			assertThrows(CannotCreateTransactionException.class, service::processPendingAccounts);
+			assertEquals(3, attempts.get());
+		} finally {
+			doCallRealMethod().when(accountDataSource).getConnection();
+		}
+		assertTrue(PricingServiceTests.COMPLETED_BEFORE_EVALUATION.isEmpty());
+		assertEquals(2, accounts.queryForObject(
+				"select count(*) from batch_outbox where processed = false", Integer.class));
+		assertEquals(0, recommendations.queryForObject(
+				"select count(*) from recommendation_batches", Integer.class));
+		service.processPendingAccounts();
+		assertEquals(2, accounts.queryForObject(
+				"select count(*) from batch_outbox where processed = true", Integer.class));
+	}
+
+	@Test
+	void wakeUpsDoNotStartAnotherBatchDuringTheCurrentRetryDelay() throws Exception {
+		addAccount(UUID.randomUUID());
+		AtomicInteger connections = new AtomicInteger();
+		var retrying = new CompletableFuture<Long>();
+		var failedAt = new AtomicReference<Long>();
+		var retryGate = new CountDownLatch(1);
+		doAnswer(invocation -> {
+			int attempt = connections.getAndIncrement();
+			if (attempt == 1) {
+				failedAt.set(System.nanoTime());
+				throw new SQLTransientConnectionException("Temporary outage", "08001");
+			}
+			if (attempt == 2) {
+				retrying.complete(System.nanoTime() - failedAt.get());
+				assertTrue(retryGate.await(5, TimeUnit.SECONDS));
+			}
+			return invocation.callRealMethod();
+		}).when(accountDataSource).getConnection();
+		try (var work = Executors.newVirtualThreadPerTaskExecutor()) {
+			var run = work.submit(service::processPendingAccounts);
+			try {
+				assertTrue(retrying.get(5, TimeUnit.SECONDS) >= Duration.ofMillis(200).toNanos());
+				addAccount(UUID.randomUUID());
+				service.wakeUp();
+				assertTrue(PricingServiceTests.COMPLETED_BEFORE_EVALUATION.isEmpty());
+			} finally {
+				retryGate.countDown();
+			}
+			run.get(5, TimeUnit.SECONDS);
+		}
+		assertEquals(List.of(0L, 1L), PricingServiceTests.COMPLETED_BEFORE_EVALUATION);
+	}
+
+	@Test
+	void startupFinishesBeforeTheWakeUpListenerAcceptsConnections() throws Exception {
+		int port;
+		try (var available = new ServerSocket(0)) {
+			port = available.getLocalPort();
+		}
+		addAccount(UUID.randomUUID());
+		var initializing = new CompletableFuture<Void>();
+		var finishInitialization = new CompletableFuture<Void>();
+		PricingServiceTests.configurationRead = () -> {
+			initializing.complete(null);
+			finishInitialization.join();
+		};
+		try (var work = Executors.newVirtualThreadPerTaskExecutor()) {
+			var application = work.submit(() -> startApplication("--server.port=" + port));
+			try {
+				initializing.get(10, TimeUnit.SECONDS);
+				try (var request = new Socket()) {
+					assertThrows(IOException.class, () -> request.connect(
+							new InetSocketAddress("127.0.0.1", port), 200));
+				}
+				finishInitialization.complete(null);
+				application.get(10, TimeUnit.SECONDS);
+				assertEquals(202, RestClient.create().post()
+						.uri("http://127.0.0.1:" + port + "/api/v1/work-available")
+						.retrieve().toBodilessEntity().getStatusCode().value());
+			} finally {
+				finishInitialization.complete(null);
+				try (var started = application.get(10, TimeUnit.SECONDS)) {
+					assertAttempts(1);
+				}
+			}
+		}
+	}
+
+	@Test
+	void startupRetryExhaustionLeavesInputAvailableForAnotherRun() throws Exception {
+		addAccount(UUID.randomUUID());
+		AtomicInteger attempts = new AtomicInteger();
+		doAnswer(invocation -> {
+			attempts.incrementAndGet();
+			throw new SQLTransientConnectionException("Temporary outage", "08001");
+		}).when(recommendationDataSource).getConnection();
+		try {
+			assertThrows(CannotCreateTransactionException.class, service::afterSingletonsInstantiated);
+			assertEquals(3, attempts.get());
+		} finally {
+			doCallRealMethod().when(recommendationDataSource).getConnection();
+		}
+		assertTrue(PricingServiceTests.COMPLETED_BEFORE_EVALUATION.isEmpty());
+		service.processPendingAccounts();
+		assertTrue(accounts.queryForObject("select processed from batch_outbox", Boolean.class));
+	}
+
+	@Test
+	void accountAndFeeRequestValidationOutcomesDoNotRetry() {
+		UUID invalidAccount = UUID.randomUUID();
+		addAccount(invalidAccount);
+		accounts.update("update accounts set product_code = 'UNKNOWN' where batch_id = ?",
+				invalidAccount);
+		UUID invalidFee = UUID.randomUUID();
+		long accountId = addAccount(invalidFee);
+		accounts.update("update fee_requests set code = 'UNKNOWN' where account_id = ?", accountId);
+
+		service.processPendingAccounts();
+
+		assertEquals(2, PricingServiceTests.COMPLETED_BEFORE_EVALUATION.size());
+		assertEquals(1, recommendations.queryForObject(
+				"select count(*) from account_recommendations where status = 'PLAN_NOT_FOUND'",
+				Integer.class));
+		assertEquals(1, recommendations.queryForObject(
+				"select count(*) from fee_request_recommendations where status = 'FEE_NOT_FOUND'",
+				Integer.class));
+		assertEquals(2, accounts.queryForObject(
+				"select count(*) from batch_outbox where processed = true", Integer.class));
+	}
+
+	void failRecommendationWrites(int failures) {
+		recommendations.execute("create sequence recommendation_write_attempts");
+		recommendations.execute("""
+				create function fail_recommendation_write() returns trigger
+				language plpgsql as $function$
+				begin
+					if nextval('recommendation_write_attempts') <= %d then
+						raise exception 'Temporary write failure' using errcode = '40001';
+					end if;
+					return NEW;
+				end;
+				$function$
+				""".formatted(failures));
+		recommendations.execute("""
+				create trigger fail_recommendation_write before insert on recommendation_outbox
+				for each row execute function fail_recommendation_write()
+				""");
+	}
+
+	void removeRecommendationWriteFailure() {
+		recommendations.execute(
+				"drop trigger fail_recommendation_write on recommendation_outbox");
+		recommendations.execute("drop function fail_recommendation_write()");
+		recommendations.execute("drop sequence recommendation_write_attempts");
 	}
 
 	@Test
@@ -632,7 +910,6 @@ class PricingPersistencePostgresTests {
 
 	ConfigurableApplicationContext startApplication(String... properties) {
 		List<String> arguments = new ArrayList<>(List.of(
-				"--server.port=0",
 				"--spring.datasource.url=" + POSTGRES.getJdbcUrl(),
 				"--spring.datasource.username=" + POSTGRES.getUsername(),
 				"--spring.datasource.password=" + POSTGRES.getPassword(),
@@ -653,6 +930,7 @@ class PricingPersistencePostgresTests {
 		arguments.addAll(List.of(properties));
 		return new SpringApplicationBuilder(
 				EngineApplication.class, PricingServiceTests.Configuration.class)
+				.properties("server.port=0")
 				.run(arguments.toArray(String[]::new));
 	}
 
