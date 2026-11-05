@@ -23,6 +23,11 @@ public class AccountRepository {
 	}
 
 	@Transactional(transactionManager = "accountTransactionManager", readOnly = true)
+	public void checkConnection() {
+		entityManager.createNativeQuery("select 1", Integer.class).getSingleResult();
+	}
+
+	@Transactional(transactionManager = "accountTransactionManager", readOnly = true)
 	public List<UUID> findUnprocessedBatchIds() {
 		return entityManager.createQuery("""
 				select accountOutbox.batchId from AccountOutboxEntity accountOutbox

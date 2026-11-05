@@ -30,6 +30,11 @@ public class PricingRepository {
 		this.mapper = mapper;
 	}
 
+	@Transactional(readOnly = true)
+	public void checkConnection() {
+		entityManager.createNativeQuery("select 1", Integer.class).getSingleResult();
+	}
+
 	@Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
 	public PriceConfig load(Set<LocalDate> pricingDates) {
 		List<BranchEntity> branches = entityManager

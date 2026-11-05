@@ -6,6 +6,7 @@ import java.util.UUID;
 import java.util.function.Supplier;
 
 import com.pricing.engine.accountStore.AccountRepository;
+import com.pricing.engine.pricingStore.PricingRepository;
 import com.pricing.engine.recommendationStore.RecommendationRepository;
 import com.pricing.engine.ruleEngine.PricingAccessException;
 import com.pricing.engine.ruleEngine.RuleEngine;
@@ -33,31 +34,46 @@ public class EngineService implements SmartInitializingSingleton {
 
 	private final AccountRepository accountRepository;
 	private final RuleEngine ruleEngine;
+
+	private final PricingRepository pricingRepository;
 	private final RecommendationRepository recommendationRepository;
 	private final RestClient transactionProcessorClient;
 	private final int maxAttempts;
 	private final Duration retryDelay;
 	private final int databaseMaxAttempts;
 	private final Duration databaseRetryDelay;
+
+	private final Duration databaseRecoveryCheckInterval;
 	private final Object processingLock = new Object();
 	private RuleEngineBatchResult pendingResult;
+
+	private UUID pendingCompletion;
+
+	private Runnable databaseConnectivityCheck;
 	private boolean running;
 
 	public EngineService(AccountRepository accountRepository, RuleEngine ruleEngine,
-			RecommendationRepository recommendationRepository, RestClient transactionProcessorClient,
+			RecommendationRepository recommendationRepository, PricingRepository pricingRepository,
+			RestClient transactionProcessorClient,
 			@Value("${transaction-processor.max-attempts}") int maxAttempts,
 			@Value("${transaction-processor.retry-delay}") Duration retryDelay,
 			@Value("${database.max-attempts}") int databaseMaxAttempts,
-			@Value("${database.retry-delay}") Duration databaseRetryDelay) {
+			@Value("${database.retry-delay}") Duration databaseRetryDelay,
+			@Value("${database.recovery-check-interval}") Duration databaseRecoveryCheckInterval) {
 		Assert.isTrue(maxAttempts > 0, "Transaction Processor attempt limit must be positive");
 		Assert.isTrue(!retryDelay.isNegative(),
 				"Transaction Processor retry delay must not be negative");
 		Assert.isTrue(databaseMaxAttempts > 0, "Database attempt limit must be positive");
 		Assert.isTrue(!databaseRetryDelay.isNegative(), "Database retry delay must not be negative");
+		Assert.isTrue(!databaseRecoveryCheckInterval.isNegative()
+				&& !databaseRecoveryCheckInterval.isZero(),
+				"Database recovery check interval must be positive");
+		this.databaseRecoveryCheckInterval = databaseRecoveryCheckInterval;
 		this.databaseMaxAttempts = databaseMaxAttempts;
 		this.databaseRetryDelay = databaseRetryDelay;
 		this.accountRepository = accountRepository;
 		this.ruleEngine = ruleEngine;
+		this.pricingRepository = pricingRepository;
 		this.recommendationRepository = recommendationRepository;
 		this.transactionProcessorClient = transactionProcessorClient;
 		this.maxAttempts = maxAttempts;
@@ -66,21 +82,20 @@ public class EngineService implements SmartInitializingSingleton {
 
 	@Override
 	public void afterSingletonsInstantiated() {
-		if (retryDatabaseOperation(recommendationRepository::existsByProcessedFalse)) {
-			Thread.startVirtualThread(this::notifyTransactionProcessor);
+		if (startRun()) {
+			drainBatches(true);
 		}
-		processPendingAccounts();
 	}
 
 	public void processPendingAccounts() {
 		if (startRun()) {
-			drainBatches();
+			drainBatches(false);
 		}
 	}
 
 	public void wakeUp() {
 		if (startRun()) {
-			Thread.startVirtualThread(this::drainBatches);
+			Thread.startVirtualThread(() -> drainBatches(false));
 		}
 	}
 
@@ -126,38 +141,64 @@ public class EngineService implements SmartInitializingSingleton {
 		}
 	}
 
-	private void drainBatches() {
-		try {
-			if (pendingResult != null) {
-				storePendingResult();
-			}
-			while (true) {
-				List<UUID> batches = retryDatabaseOperation(() -> {
+	private void drainBatches(boolean startup) {
+		while (true) {
+			try {
+				if (databaseConnectivityCheck != null && !waitForDatabaseRecovery()) {
 					synchronized (processingLock) {
-						List<UUID> pending = accountRepository.findUnprocessedBatchIds();
-						if (pending.isEmpty()) {
-							running = false;
-						}
-						return pending;
+						running = false;
 					}
-				});
-				if (batches.isEmpty()) {
 					return;
 				}
-				for (UUID batchId : batches) {
-					RuleEngineBatch batch = retryDatabaseOperation(() -> accountRepository.load(batchId));
-					pendingResult = retryDatabaseOperation(() -> ruleEngine.price(batch));
+				if (startup) {
+					if (retryDatabaseOperation(recommendationRepository::existsByProcessedFalse,
+							recommendationRepository::checkConnection)) {
+						Thread.startVirtualThread(this::notifyTransactionProcessor);
+					}
+					startup = false;
+				}
+				if (pendingResult != null) {
 					storePendingResult();
 				}
+				if (pendingCompletion != null) {
+					completePendingBatch();
+				}
+				while (true) {
+					List<UUID> batches = retryDatabaseOperation(() -> {
+						synchronized (processingLock) {
+							List<UUID> pending = accountRepository.findUnprocessedBatchIds();
+							if (pending.isEmpty()) {
+								running = false;
+							}
+							return pending;
+						}
+					}, accountRepository::checkConnection);
+					if (batches.isEmpty()) {
+						return;
+					}
+					for (UUID batchId : batches) {
+						RuleEngineBatch batch = retryDatabaseOperation(
+								() -> accountRepository.load(batchId), accountRepository::checkConnection);
+						pendingResult = retryDatabaseOperation(
+								() -> ruleEngine.price(batch), pricingRepository::checkConnection);
+						storePendingResult();
+					}
+				}
+			} catch (RuntimeException | Error ex) {
+				if (isTemporaryDatabaseFailure(ex) && databaseConnectivityCheck != null
+						&& !Thread.currentThread().isInterrupted()) {
+					continue;
+				}
+				if (!isTemporaryDatabaseFailure(ex)) {
+					pendingResult = null;
+					pendingCompletion = null;
+					databaseConnectivityCheck = null;
+				}
+				synchronized (processingLock) {
+					running = false;
+				}
+				throw ex;
 			}
-		} catch (RuntimeException | Error ex) {
-			if (!isTemporaryDatabaseFailure(ex)) {
-				pendingResult = null;
-			}
-			synchronized (processingLock) {
-				running = false;
-			}
-			throw ex;
 		}
 	}
 
@@ -166,16 +207,45 @@ public class EngineService implements SmartInitializingSingleton {
 		retryDatabaseOperation(() -> {
 			recommendationRepository.save(result);
 			return null;
-		});
+		}, recommendationRepository::checkConnection);
 		pendingResult = null;
+		pendingCompletion = result.batchId();
 		Thread.startVirtualThread(this::notifyTransactionProcessor);
-		retryDatabaseOperation(() -> {
-			accountRepository.markProcessed(result.batchId());
-			return null;
-		});
+		completePendingBatch();
 	}
 
-	private <T> T retryDatabaseOperation(Supplier<T> operation) {
+	private void completePendingBatch() {
+		retryDatabaseOperation(() -> {
+			accountRepository.markProcessed(pendingCompletion);
+			return null;
+		}, accountRepository::checkConnection);
+		pendingCompletion = null;
+	}
+
+	private boolean waitForDatabaseRecovery() {
+		while (true) {
+			try {
+				Thread.sleep(databaseRecoveryCheckInterval);
+			} catch (InterruptedException ex) {
+				log.warn("Database recovery interrupted");
+				Thread.currentThread().interrupt();
+				return false;
+			}
+			try {
+				databaseConnectivityCheck.run();
+				databaseConnectivityCheck = null;
+				log.info("Database connectivity restored. Processing resumed");
+				return true;
+			} catch (RuntimeException ex) {
+				if (!isTemporaryDatabaseFailure(ex)) {
+					throw ex;
+				}
+				log.warn("Database remains unavailable. {}", ex.getMessage());
+			}
+		}
+	}
+
+	private <T> T retryDatabaseOperation(Supplier<T> operation, Runnable connectivityCheck) {
 		for (int attempt = 1; ; attempt++) {
 			try {
 				return operation.get();
@@ -184,7 +254,8 @@ public class EngineService implements SmartInitializingSingleton {
 					throw ex;
 				}
 				if (attempt == databaseMaxAttempts) {
-					log.error("Final database operation attempt failed. {}. Processing stopped",
+					databaseConnectivityCheck = connectivityCheck;
+					log.error("Final database operation attempt failed. {}. Processing paused",
 							ex.getMessage());
 					throw ex;
 				}
