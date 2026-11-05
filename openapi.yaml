@@ -1,0 +1,26 @@
+openapi: 3.0.3
+info:
+  title: Pricing Engine API
+  description: Wake the Pricing Engine to discover durably persisted account batches.
+  version: 1.0.0
+servers:
+  - url: http://localhost:8082
+    description: Local development server
+tags:
+  - name: Pricing
+paths:
+  /api/v1/work-available:
+    post:
+      tags: [Pricing]
+      operationId: wakeUp
+      summary: Request discovery of pending account batches
+      description: >-
+        A generic wake-up with no request body, batch identifier, or business data.
+        Startup and wake-ups share one serial processing run. A wake-up received
+        during processing needs no separate run because the engine scans again
+        after each discovered set. Wake-ups are not stored or queued.
+      responses:
+        '202':
+          description: >-
+            The wake-up is accepted. The response has no body and does not confirm
+            that any batch has completed pricing or that recommendations are stored.
