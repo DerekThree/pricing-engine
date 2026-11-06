@@ -1,5 +1,7 @@
 package com.pricing.engine.recommendationStore;
 
+import java.util.UUID;
+
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import org.springframework.stereotype.Repository;
@@ -29,6 +31,15 @@ public class RecommendationRepository {
 		return !entityManager.createQuery("""
 				select 1 from RecommendationOutboxEntity batch where batch.processed = false
 				""", Integer.class)
+				.setMaxResults(1)
+				.getResultList().isEmpty();
+	}
+
+	@Transactional(transactionManager = "recommendationTransactionManager", readOnly = true)
+	public boolean existsByBatchId(UUID batchId) {
+		return !entityManager.createQuery("""
+				select 1 from RecommendationOutboxEntity batch where batch.batchId = :batchId
+				""", Integer.class).setParameter("batchId", batchId)
 				.setMaxResults(1)
 				.getResultList().isEmpty();
 	}

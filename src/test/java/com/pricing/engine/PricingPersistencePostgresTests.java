@@ -261,7 +261,8 @@ class PricingPersistencePostgresTests {
 		AtomicInteger connections = new AtomicInteger();
 		doAnswer(invocation -> {
 			Connection connection = (Connection) invocation.callRealMethod();
-			if (connections.getAndIncrement() < 3) {
+			if (!PricingServiceTests.COMPLETED_BEFORE_EVALUATION.isEmpty()
+					&& connections.getAndIncrement() < 3) {
 				PricingServiceTests.januaryAmount = "9.99";
 				try (var statement = connection.createStatement();
 						var rows = statement.executeQuery(
@@ -300,9 +301,11 @@ class PricingPersistencePostgresTests {
 		var unavailable = new AtomicBoolean(true);
 		var attempts = new AtomicInteger();
 		doAnswer(invocation -> {
-			attempts.incrementAndGet();
-			if (unavailable.get()) {
-				throw new SQLTransientConnectionException("Recommendation Store outage", "08001");
+			if (!PricingServiceTests.COMPLETED_BEFORE_EVALUATION.isEmpty()) {
+				attempts.incrementAndGet();
+				if (unavailable.get()) {
+					throw new SQLTransientConnectionException("Recommendation Store outage", "08001");
+				}
 			}
 			return invocation.callRealMethod();
 		}).when(recommendationDataSource).getConnection();
@@ -621,6 +624,90 @@ class PricingPersistencePostgresTests {
 				"select amount from fee_request_recommendations", BigDecimal.class));
 	}
 
+
+	@ParameterizedTest
+	@ValueSource(booleans = {false, true})
+	void restartRepairsAccountCompletionWithoutChangingCommittedOutput(boolean processed) {
+		addAccount(UUID.randomUUID());
+		accounts.execute("""
+				alter table batch_outbox add constraint reject_test_completion
+				check (processed = false)
+				""");
+		try {
+			assertThrows(DataIntegrityViolationException.class, service::processPendingAccounts);
+			assertAttempts(1);
+			assertFalse(accounts.queryForObject(
+					"select processed from batch_outbox", Boolean.class));
+		} finally {
+			accounts.execute("alter table batch_outbox drop constraint reject_test_completion");
+		}
+		recommendations.update("update recommendation_outbox set processed = ?", processed);
+		var committed = storedRecommendations(recommendations);
+		PricingServiceTests.januaryAmount = "9.99";
+		PricingServiceTests.configurationRead = () -> {
+			throw new AssertionError("Committed output must not be recalculated on restart");
+		};
+
+		try (var application = startApplication()) {
+			assertAttempts(processed ? 1 : 2);
+			assertEquals(committed, storedRecommendations(recommendations));
+			assertTrue(accounts.queryForObject(
+					"select processed from batch_outbox", Boolean.class));
+			assertEquals(1, PricingServiceTests.COMPLETED_BEFORE_EVALUATION.size());
+			application.getBean(EngineService.class).processPendingAccounts();
+			assertEquals(committed, storedRecommendations(recommendations));
+		}
+	}
+
+
+	@ParameterizedTest
+	@ValueSource(strings = {"recommendation", "account"})
+	void lostCommitAcknowledgementPreservesCommittedOutput(String store) throws Exception {
+		addAccount(UUID.randomUUID());
+		var availableRecommendations = new JdbcTemplate(new DriverManagerDataSource(
+				url("recommendationdb"), POSTGRES.getUsername(), POSTGRES.getPassword()));
+		DataSource storeDataSource = store.equals("recommendation")
+				? recommendationDataSource : accountDataSource;
+		var loseAcknowledgement = new AtomicBoolean(true);
+		var committed = new AtomicReference<List<List<Map<String, Object>>>>();
+		doAnswer(invocation -> {
+			Connection connection = (Connection) invocation.callRealMethod();
+			return Proxy.newProxyInstance(Connection.class.getClassLoader(),
+					new Class<?>[] {Connection.class}, (proxy, method, arguments) -> {
+						if (method.getName().equals("commit") && !connection.isReadOnly()
+								&& loseAcknowledgement.compareAndSet(true, false)) {
+							connection.commit();
+							if (store.equals("recommendation")) {
+								availableRecommendations.update(
+										"update recommendation_outbox set processed = true");
+							}
+							committed.set(storedRecommendations(availableRecommendations));
+							PricingServiceTests.januaryAmount = "9.99";
+							PricingServiceTests.configurationRead = () -> {
+								throw new AssertionError("A storage retry must not recalculate");
+							};
+							throw new SQLTransientConnectionException(
+									"Commit acknowledgement lost", "08006");
+						}
+						try {
+							return method.invoke(connection, arguments);
+						} catch (InvocationTargetException ex) {
+							throw ex.getCause();
+						}
+					});
+		}).when(storeDataSource).getConnection();
+		try {
+			service.processPendingAccounts();
+			assertFalse(loseAcknowledgement.get());
+			assertAttempts(1);
+			assertCompletedBatchUnchanged(committed.get());
+			assertEquals(new BigDecimal("2.50"), recommendations.queryForObject(
+					"select amount from fee_request_recommendations", BigDecimal.class));
+		} finally {
+			doCallRealMethod().when(storeDataSource).getConnection();
+		}
+	}
+
 	void failRecommendationWrites(int failures) {
 		recommendations.execute("create sequence recommendation_write_attempts");
 		recommendations.execute("""
@@ -823,6 +910,19 @@ class PricingPersistencePostgresTests {
 		} finally {
 			recommendations.execute(
 					"alter table recommendation_outbox drop constraint reject_test_output");
+		}
+		PricingServiceTests.januaryAmount = "9.99";
+		try (var application = startApplication()) {
+			assertAttempts(1);
+			assertTrue(accounts.queryForObject(
+					"select processed from batch_outbox", Boolean.class));
+			assertEquals(1, recommendations.queryForObject(
+					"select count(*) from recommendation_batches", Integer.class));
+			assertEquals(1, recommendations.queryForObject(
+					"select count(*) from recommendation_outbox", Integer.class));
+			assertEquals(new BigDecimal("9.99"), recommendations.queryForObject(
+					"select amount from fee_request_recommendations", BigDecimal.class));
+			assertEquals(2, PricingServiceTests.COMPLETED_BEFORE_EVALUATION.size());
 		}
 	}
 

@@ -1,7 +1,9 @@
 package com.pricing.engine;
 
+import java.sql.SQLException;
 import java.time.Duration;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 import java.util.function.Supplier;
 
@@ -18,6 +20,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.RecoverableDataAccessException;
 import org.springframework.dao.TransientDataAccessException;
 import org.springframework.http.HttpStatusCode;
@@ -177,6 +180,13 @@ public class EngineService implements SmartInitializingSingleton {
 						return;
 					}
 					for (UUID batchId : batches) {
+						if (retryDatabaseOperation(
+								() -> recommendationRepository.existsByBatchId(batchId),
+								recommendationRepository::checkConnection)) {
+							pendingCompletion = batchId;
+							completePendingBatch();
+							continue;
+						}
 						RuleEngineBatch batch = retryDatabaseOperation(
 								() -> accountRepository.load(batchId), accountRepository::checkConnection);
 						pendingResult = retryDatabaseOperation(
@@ -205,7 +215,24 @@ public class EngineService implements SmartInitializingSingleton {
 	private void storePendingResult() {
 		RuleEngineBatchResult result = pendingResult;
 		retryDatabaseOperation(() -> {
-			recommendationRepository.save(result);
+			try {
+				recommendationRepository.save(result);
+			} catch (DataIntegrityViolationException ex) {
+				Throwable cause = ex;
+				while (cause != null) {
+					if (cause instanceof SQLException sqlException
+							&& "23505".equals(sqlException.getSQLState())
+							&& sqlException.getMessage() != null) {
+						String message = sqlException.getMessage().toLowerCase(Locale.ROOT);
+						if (message.contains("recommendation_batches_pkey")
+								|| message.contains("recommendation_outbox_pkey")) {
+							return null;
+						}
+					}
+					cause = cause.getCause();
+				}
+				throw ex;
+			}
 			return null;
 		}, recommendationRepository::checkConnection);
 		pendingResult = null;
