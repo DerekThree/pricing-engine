@@ -1,0 +1,131 @@
+name: Engine CD
+
+on:
+  workflow_run:
+    workflows:
+      - Engine CI
+    types:
+      - completed
+
+permissions:
+  actions: read
+  id-token: write
+
+concurrency:
+  group: engine-cd
+  cancel-in-progress: false
+  
+jobs:
+  deploy:
+    if: >-
+      ${{
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.head_repository.full_name == github.repository
+      }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Authenticate to AWS
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::064550674390:role/pricing-backend-github-deploy
+          aws-region: us-east-1
+
+      - name: Verify ECS is ready
+        run: |
+          service_json=$(aws ecs describe-services \
+            --cluster pricing-app-cluster \
+            --services pricing-engine-service \
+            --output json)
+
+          if ! jq -e '
+            (.services[0].status == "ACTIVE") and
+            (.services[0].desiredCount > 0) and
+            (.services[0].runningCount >= .services[0].desiredCount) and
+            (.services[0].deployments | length == 1) and
+            (.services[0].deployments[0].rolloutState == "COMPLETED")
+          ' <<< "$service_json" > /dev/null; then
+            echo "::error::Deployment blocked: ECS infrastructure is stopped or not ready."
+            exit 1
+          fi
+
+      - name: Download CI image
+        uses: actions/download-artifact@v7
+        with:
+          name: pricing-engine-image
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Load CI image
+        run: docker load --input pricing-engine-image.tar
+
+      - name: Publish CI image to ECR
+        env:
+          COMMIT_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          registry=064550674390.dkr.ecr.us-east-1.amazonaws.com
+          image="$registry/pricing-engine"
+
+          aws ecr get-login-password |
+            docker login --username AWS --password-stdin "$registry"
+
+          docker tag pricing-engine:ci "$image:$COMMIT_SHA"
+          docker tag pricing-engine:ci "$image:latest"
+
+          docker push "$image:$COMMIT_SHA"
+          docker push "$image:latest"
+
+      - name: Deploy and verify ECS
+        run: |
+          deployment_id=$(aws ecs update-service \
+            --cluster pricing-app-cluster \
+            --service pricing-engine-service \
+            --force-new-deployment \
+            --query "service.deployments[?status=='PRIMARY'].id | [0]" \
+            --output text)
+
+          aws ecs wait services-stable \
+            --cluster pricing-app-cluster \
+            --services pricing-engine-service
+
+          active_id=$(aws ecs describe-services \
+            --cluster pricing-app-cluster \
+            --services pricing-engine-service \
+            --query "services[0].deployments[?status=='PRIMARY'].id | [0]" \
+            --output text)
+
+          if [ "$active_id" != "$deployment_id" ]; then
+            echo "::error::New ECS deployment did not succeed. Possible rollback."
+            exit 1
+          fi
+
+      - name: Verify deployed image against published image
+        env:
+          COMMIT_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          expected=$(aws ecr batch-get-image \
+            --repository-name pricing-engine \
+            --image-ids "imageTag=$COMMIT_SHA" \
+            --query 'images[0].imageId.imageDigest' \
+            --output text)
+
+          task=$(aws ecs list-tasks \
+            --cluster pricing-app-cluster \
+            --service-name pricing-engine-service \
+            --desired-status RUNNING \
+            --query 'taskArns[0]' \
+            --output text)
+
+          actual=$(aws ecs describe-tasks \
+            --cluster pricing-app-cluster \
+            --tasks "$task" \
+            --query "tasks[0].containers[?name=='Main'].imageDigest | [0]" \
+            --output text)
+
+          if [[ "$expected" != sha256:* || "$actual" != "$expected" ]]; then
+            echo "::error::Deployed image does not match the image published to ECR."
+            exit 1
+          fi          
+          
