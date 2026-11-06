@@ -12,6 +12,7 @@ import com.pricing.engine.pricingStore.PricingPlanEntity;
 import com.pricing.engine.pricingStore.PricingPlanFeeEntity;
 import com.pricing.engine.pricingStore.RegionEntity;
 import com.pricing.engine.ruleEngine.PriceConfig;
+import com.pricing.engine.ruleEngine.RuleEngineRepository;
 
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.TypedQuery;
@@ -20,7 +21,7 @@ import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 @Repository
-public class PricingRepository {
+public class PricingRepository implements RuleEngineRepository {
 
 	private final EntityManager entityManager;
 	private final PriceConfigMapper mapper;
@@ -35,6 +36,7 @@ public class PricingRepository {
 		entityManager.createNativeQuery("select 1", Integer.class).getSingleResult();
 	}
 
+	@Override
 	@Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
 	public PriceConfig load(Set<LocalDate> pricingDates) {
 		List<BranchEntity> branches = entityManager

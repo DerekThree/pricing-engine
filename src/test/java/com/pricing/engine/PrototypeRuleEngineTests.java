@@ -9,9 +9,9 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import com.pricing.engine.pricingStore.PricingRepository;
 import com.pricing.engine.ruleEngine.PriceConfig;
 import com.pricing.engine.ruleEngine.RuleEngine;
+import com.pricing.engine.ruleEngine.RuleEngineRepository;
 import com.pricing.engine.ruleEngine.RuleEngineBatch;
 import com.pricing.engine.ruleEngine.RuleEngineBatchResult;
 
@@ -51,7 +51,7 @@ class PrototypeRuleEngineTests {
 	void pricesOneFlatFeeAtInclusiveActiveThroughBoundary() {
 		PriceConfig config = config(
 				plan("PLAN0001", "PROD0001", "REGION001", AUGUST_1, AUGUST_31));
-		PricingRepository repository = repository(config);
+		RuleEngineRepository repository = repository(config);
 		RuleEngine engine = new RuleEngine(repository);
 
 		RuleEngineBatchResult result = engine.price(batch("PROD0001", "BRANCH001", AUGUST_31));
@@ -66,7 +66,7 @@ class PrototypeRuleEngineTests {
 		PriceConfig config = config(plan(List.of(
 				flatFee("FEE00001"),
 				flatFee("FEE00002"))));
-		PricingRepository repository = repository(config);
+		RuleEngineRepository repository = repository(config);
 		RuleEngine engine = new RuleEngine(repository);
 		RuleEngineBatch batch = new RuleEngineBatch(BATCH_ID, List.of(
 				new Account(
@@ -641,8 +641,8 @@ class PrototypeRuleEngineTests {
 				arguments(AttributeType.DATE, "2026-08-15", "not-a-date"));
 	}
 
-	private static PricingRepository repository(PriceConfig config) {
-		PricingRepository repository = mock(PricingRepository.class);
+	private static RuleEngineRepository repository(PriceConfig config) {
+		RuleEngineRepository repository = mock(RuleEngineRepository.class);
 		when(repository.load(anySet())).thenReturn(config);
 		return repository;
 	}

@@ -8,7 +8,6 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import com.pricing.engine.pricingStore.PricingRepository;
 import com.pricing.engine.ruleEngine.PriceConfig.AttributeDefinition;
 import com.pricing.engine.ruleEngine.PriceConfig.Branch;
 import com.pricing.engine.ruleEngine.PriceConfig.EligibilityCondition;
@@ -25,9 +24,9 @@ import org.springframework.stereotype.Component;
 @Component
 public class RuleEngine {
 
-	private final PricingRepository configRepository;
+	private final RuleEngineRepository configRepository;
 
-	public RuleEngine(PricingRepository configRepository) {
+	public RuleEngine(RuleEngineRepository configRepository) {
 		this.configRepository = configRepository;
 	}
 
