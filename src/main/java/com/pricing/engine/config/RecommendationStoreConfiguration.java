@@ -4,7 +4,7 @@ import java.util.Map;
 
 import javax.sql.DataSource;
 
-import com.pricing.engine.recommendationStore.RecommendationBatchEntity;
+import com.pricing.engine.recommendationStore.RecommendationOutboxEntity;
 import com.zaxxer.hikari.HikariDataSource;
 import jakarta.persistence.EntityManagerFactory;
 import org.flywaydb.core.Flyway;
@@ -47,7 +47,7 @@ public class RecommendationStoreConfiguration {
 			EntityManagerFactoryBuilder builder,
 			@Qualifier("recommendationDataSource") DataSource dataSource,
 			@Value("${recommendation-store.jpa.ddl-auto:validate}") String ddlMode) {
-		return builder.dataSource(dataSource).packages(RecommendationBatchEntity.class)
+		return builder.dataSource(dataSource).packages(RecommendationOutboxEntity.class)
 				.persistenceUnit("recommendations")
 				.properties(Map.of("hibernate.hbm2ddl.auto", ddlMode)).build();
 	}

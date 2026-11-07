@@ -108,7 +108,7 @@
                 <directory>../pricing-mock-server/src/main/resources/db/migration</directory>
                 <targetPath>account-store</targetPath>
                 <includes>
-                    <include>V1__create_schema.sql</include>
+                    <include>V*__*.sql</include>
                 </includes>
             </testResource>
         </testResources>

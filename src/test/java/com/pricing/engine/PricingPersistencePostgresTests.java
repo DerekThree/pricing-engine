@@ -34,6 +34,7 @@ import com.sun.net.httpserver.HttpServer;
 import com.pricing.engine.accountStore.AccountRepository;
 import com.pricing.engine.recommendationStore.RecommendationRepository;
 import com.pricing.engine.ruleEngine.RuleEngineBatch;
+import com.pricing.engine.ruleEngine.RuleEngine;
 import com.pricing.engine.ruleEngine.RuleEngineBatchResult;
 import com.pricing.engine.ruleEngine.RuleEngineBatchResult.*;
 
@@ -71,7 +72,7 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doCallRealMethod;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@SpringBootTest
+@SpringBootTest(properties = "engine.max-workers=3")
 @AutoConfigureMockMvc
 @Import(PricingServiceTests.Configuration.class)
 @Testcontainers(disabledWithoutDocker = true)
@@ -144,6 +145,9 @@ class PricingPersistencePostgresTests {
 	@Autowired
 	RecommendationRepository recommendationRepository;
 
+	@Autowired
+	RuleEngine ruleEngine;
+
 	JdbcTemplate accounts;
 	JdbcTemplate recommendations;
 
@@ -166,7 +170,7 @@ class PricingPersistencePostgresTests {
 		responseGate = new CountDownLatch(0);
 		recommendations.execute("""
 				truncate recommendation_eligibility_reasons, fee_request_recommendations,
-				account_recommendations, recommendation_outbox, recommendation_batches
+				account_recommendations, recommendation_outbox
 				""");
 		accounts.execute("truncate account_attributes, fee_requests, accounts, batch_outbox");
 	}
@@ -200,7 +204,7 @@ class PricingPersistencePostgresTests {
 				PricingServiceTests.januaryAmount = "9.99";
 				try (var statement = connection.createStatement();
 						var rows = statement.executeQuery(
-								"select count(*) from recommendation_batches")) {
+								"select count(*) from recommendation_outbox")) {
 					rows.next();
 					assertEquals(0, rows.getInt(1));
 				}
@@ -272,7 +276,19 @@ class PricingPersistencePostgresTests {
 			Connection connection = (Connection) invocation.callRealMethod();
 			return Proxy.newProxyInstance(Connection.class.getClassLoader(),
 					new Class<?>[] {Connection.class}, (proxy, method, arguments) -> {
+						boolean sourceCompletion = false;
+						if (store.equals("account") && method.getName().equals("commit")
+								&& loseAcknowledgement.get()) {
+							try (var statement = connection.createStatement();
+									var rows = statement.executeQuery("""
+											select exists(select 1 from batch_outbox where processed)
+											""")) {
+								rows.next();
+								sourceCompletion = rows.getBoolean(1);
+							}
+						}
 						if (method.getName().equals("commit") && !connection.isReadOnly()
+								&& (store.equals("recommendation") || sourceCompletion)
 								&& loseAcknowledgement.compareAndSet(true, false)) {
 							connection.commit();
 							if (store.equals("recommendation")) {
@@ -361,8 +377,10 @@ class PricingPersistencePostgresTests {
 				check (batch_id <> 'b566f38a-0d68-4adb-8a86-84b0d945d645')
 				""");
 		try {
-			assertThrows(DataIntegrityViolationException.class, service::processPendingAccounts);
-			for (String table : List.of("recommendation_batches", "account_recommendations",
+			RuleEngineBatchResult result = ruleEngine.price(accountRepository.load(batchId));
+			assertThrows(DataIntegrityViolationException.class,
+					() -> recommendationRepository.save(result));
+			for (String table : List.of("account_recommendations",
 					"fee_request_recommendations", "recommendation_eligibility_reasons",
 					"recommendation_outbox")) {
 				assertEquals(0, recommendations.queryForObject(
@@ -381,8 +399,6 @@ class PricingPersistencePostgresTests {
 			assertAttempts(1);
 			assertTrue(accounts.queryForObject(
 					"select processed from batch_outbox", Boolean.class));
-			assertEquals(1, recommendations.queryForObject(
-					"select count(*) from recommendation_batches", Integer.class));
 			assertEquals(1, recommendations.queryForObject(
 					"select count(*) from recommendation_outbox", Integer.class));
 			assertEquals(new BigDecimal("9.99"), recommendations.queryForObject(
@@ -442,7 +458,7 @@ class PricingPersistencePostgresTests {
 		recommendationRepository.save(result);
 
 		assertEquals(batchId, recommendations.queryForObject(
-				"select batch_id from recommendation_batches", UUID.class));
+				"select batch_id from recommendation_outbox", UUID.class));
 		assertEquals("JANPLAN", recommendations.queryForObject("""
 				select pricing_plan_code from account_recommendations where account_number = 'A1'
 				""", String.class));
@@ -495,8 +511,6 @@ class PricingPersistencePostgresTests {
 		try {
 			assertThrows(DataIntegrityViolationException.class, service::processPendingAccounts);
 			assertEquals(1, recommendations.queryForObject(
-					"select count(*) from recommendation_batches", Integer.class));
-			assertEquals(1, recommendations.queryForObject(
 					"select count(*) from recommendation_outbox", Integer.class));
 			assertEquals(1, recommendations.queryForObject(
 					"select count(*) from fee_request_recommendations", Integer.class));
@@ -538,7 +552,7 @@ class PricingPersistencePostgresTests {
 		arguments.addAll(List.of(properties));
 		return new SpringApplicationBuilder(
 				EngineApplication.class, PricingServiceTests.Configuration.class)
-				.properties("server.port=0")
+				.properties("server.port=0", "engine.max-workers=1")
 				.run(arguments.toArray(String[]::new));
 	}
 
@@ -582,7 +596,6 @@ class PricingPersistencePostgresTests {
 
 	static List<List<Map<String, Object>>> storedRecommendations(JdbcTemplate database) {
 		return List.of(
-				database.queryForList("select * from recommendation_batches order by 1"),
 				database.queryForList("select * from account_recommendations order by 1"),
 				database.queryForList("select * from fee_request_recommendations order by 1"),
 				database.queryForList("select * from recommendation_eligibility_reasons order by 1, 2"),

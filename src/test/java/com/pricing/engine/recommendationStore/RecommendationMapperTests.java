@@ -30,9 +30,7 @@ class RecommendationMapperTests {
 		var stored = new RecommendationMapper().toEntity(result);
 
 		assertEquals(batchId, stored.getBatchId());
-		assertEquals(batchId, stored.getOutbox().getBatchId());
-		assertSame(stored, stored.getOutbox().getBatch());
-		assertFalse(stored.getOutbox().isProcessed());
+		assertFalse(stored.isProcessed());
 		var account = stored.getAccounts().getFirst();
 		assertSame(stored, account.getBatch());
 		assertEquals("A1", account.getAccountNumber());

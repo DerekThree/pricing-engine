@@ -11,18 +11,16 @@ import com.pricing.engine.ruleEngine.RuleEngineBatchResult.FeeResult;
 @Component
 public class RecommendationMapper {
 
-	public RecommendationBatchEntity toEntity(RuleEngineBatchResult result) {
-		RecommendationBatchEntity batch = RecommendationBatchEntity.builder()
-				.batchId(result.batchId()).build();
+	public RecommendationOutboxEntity toEntity(RuleEngineBatchResult result) {
+		RecommendationOutboxEntity batch = RecommendationOutboxEntity.builder()
+				.batchId(result.batchId()).processed(false).build();
 		batch.setAccounts(result.accounts().stream().map(account -> toAccount(account, batch))
 				.toList());
-		batch.setOutbox(RecommendationOutboxEntity.builder()
-				.batchId(result.batchId()).batch(batch).build());
 		return batch;
 	}
 
 	private AccountRecommendationEntity toAccount(
-			AccountResult result, RecommendationBatchEntity batch) {
+			AccountResult result, RecommendationOutboxEntity batch) {
 		AccountRecommendationEntity account = AccountRecommendationEntity.builder()
 				.batch(batch).accountNumber(result.accountNumber()).status(result.status())
 				.pricingPlanCode(result.pricingPlanCode()).build();

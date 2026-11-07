@@ -27,4 +27,7 @@ public class AccountOutboxEntity {
 
 	@Column(nullable = false)
 	private boolean processed;
+
+	@Column(columnDefinition = "text")
+	private String error;
 }

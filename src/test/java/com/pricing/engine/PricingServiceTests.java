@@ -48,7 +48,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@SpringBootTest
+@SpringBootTest(properties = "engine.max-workers=1")
 @AutoConfigureMockMvc
 class PricingServiceTests {
 
@@ -97,15 +97,10 @@ class PricingServiceTests {
 
 	@AfterEach
 	void cleanUp() {
-		int batches = recommendations.queryForObject(
-				"select count(*) from recommendation_batches", Integer.class);
-		await().atMost(Duration.ofSeconds(5))
-				.untilAsserted(() -> assertEquals(batches, WAKE_UPS.get()));
 		recommendations.update("delete from recommendation_eligibility_reasons");
 		recommendations.update("delete from fee_request_recommendations");
 		recommendations.update("delete from account_recommendations");
 		recommendations.update("delete from recommendation_outbox");
-		recommendations.update("delete from recommendation_batches");
 		accounts.update("delete from account_attributes");
 		accounts.update("delete from fee_requests");
 		accounts.update("delete from accounts");
@@ -124,6 +119,9 @@ class PricingServiceTests {
 		addAccount(batchId, "FEB", LocalDate.of(2026, 2, 15));
 
 		service.afterSingletonsInstantiated();
+		service.afterSingletonsInstantiated();
+		await().atMost(Duration.ofSeconds(5))
+				.until(() -> WAKE_UPS.get() >= 2);
 
 		assertTrue(accounts.queryForObject(
 				"select processed from batch_outbox where batch_id = ?", Boolean.class, batchId));

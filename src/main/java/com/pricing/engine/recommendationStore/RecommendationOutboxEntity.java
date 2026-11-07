@@ -1,17 +1,18 @@
 package com.pricing.engine.recommendationStore;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
+import jakarta.persistence.CascadeType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
-import jakarta.persistence.FetchType;
 import jakarta.persistence.Id;
-import jakarta.persistence.JoinColumn;
-import jakarta.persistence.MapsId;
-import jakarta.persistence.OneToOne;
+import jakarta.persistence.OneToMany;
 import jakarta.persistence.Table;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
+import lombok.Builder.Default;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -29,11 +30,10 @@ public class RecommendationOutboxEntity {
 	@Column(name = "batch_id", nullable = false)
 	private UUID batchId;
 
-	@MapsId
-	@OneToOne(fetch = FetchType.LAZY, optional = false)
-	@JoinColumn(name = "batch_id", nullable = false)
-	private RecommendationBatchEntity batch;
-
 	@Column(nullable = false)
 	private boolean processed;
+
+	@Default
+	@OneToMany(mappedBy = "batch", cascade = CascadeType.ALL, orphanRemoval = true)
+	private List<AccountRecommendationEntity> accounts = new ArrayList<>();
 }

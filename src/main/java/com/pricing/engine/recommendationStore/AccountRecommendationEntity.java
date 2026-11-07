@@ -40,7 +40,7 @@ public class AccountRecommendationEntity {
 
 	@ManyToOne(fetch = FetchType.LAZY, optional = false)
 	@JoinColumn(name = "batch_id", nullable = false)
-	private RecommendationBatchEntity batch;
+	private RecommendationOutboxEntity batch;
 
 	@Column(name = "account_number", nullable = false, length = 25)
 	private String accountNumber;
