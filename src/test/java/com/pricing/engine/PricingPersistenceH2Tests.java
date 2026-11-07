@@ -5,7 +5,6 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
-import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
@@ -514,6 +513,9 @@ class PricingPersistenceH2Tests {
 			accounts.update("update batch_outbox set error = NULL where batch_id = ?", failed);
 			try (var restarted = startApplication()) {
 				assertTrue(restarted.isActive());
+				await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertTrue(
+						accounts.queryForObject("select processed from batch_outbox where batch_id = ?",
+								Boolean.class, failed)));
 			}
 		}
 		assertTrue(accounts.queryForObject(
@@ -1095,7 +1097,7 @@ class PricingPersistenceH2Tests {
 	}
 
 	@Test
-	void startupFinishesBeforeTheWakeUpListenerAcceptsConnections() throws Exception {
+	void readinessDoesNotWaitForPendingAccountProcessing() throws Exception {
 		int port;
 		try (var available = new ServerSocket(0)) {
 			port = available.getLocalPort();
@@ -1111,21 +1113,47 @@ class PricingPersistenceH2Tests {
 			var application = work.submit(() -> startApplication("--server.port=" + port));
 			try {
 				initializing.get(10, TimeUnit.SECONDS);
-				try (var request = new Socket()) {
-					assertThrows(IOException.class, () -> request.connect(
-							new InetSocketAddress("127.0.0.1", port), 200));
-				}
-				finishInitialization.complete(null);
 				application.get(10, TimeUnit.SECONDS);
-				assertEquals(202, RestClient.create().post()
-						.uri("http://127.0.0.1:" + port + "/api/v1/work-available")
+				assertEquals(200, RestClient.create().get()
+						.uri("http://127.0.0.1:" + port + "/openapi.yaml")
 						.retrieve().toBodilessEntity().getStatusCode().value());
+				assertFalse(accounts.queryForObject("select processed from batch_outbox", Boolean.class));
 			} finally {
 				finishInitialization.complete(null);
 				try (var started = application.get(10, TimeUnit.SECONDS)) {
+					await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertTrue(
+							accounts.queryForObject("select processed from batch_outbox", Boolean.class)));
 					assertAttempts(1);
 				}
 			}
+		}
+	}
+
+	@Test
+	void readinessDoesNotWaitForUnavailableDownstreamServices() throws Exception {
+		String recommendationUrl = url(UUID.randomUUID().toString());
+		var dataSource = new DriverManagerDataSource(recommendationUrl, "sa", "");
+		Flyway.configure().dataSource(dataSource).locations("classpath:db/recommendation")
+				.load().migrate();
+		var pendingRecommendations = new JdbcTemplate(dataSource);
+		pendingRecommendations.update("insert into recommendation_outbox(batch_id) values (?)",
+				UUID.randomUUID());
+		responses = new int[] {503};
+		responseGate = new CountDownLatch(1);
+		try (var application = startApplication("--transaction-processor.http-timeout=5s",
+				"--recommendation-store.datasource.url=" + recommendationUrl,
+				"--account-store.datasource.url=" + url(UUID.randomUUID().toString()))) {
+			await().atMost(Duration.ofSeconds(5)).until(() -> ACTIVE_REQUESTS.get() > 0);
+			String port = application.getEnvironment().getProperty("local.server.port");
+			assertEquals(200, RestClient.create().get()
+					.uri("http://127.0.0.1:" + port + "/openapi.yaml")
+					.retrieve().toBodilessEntity().getStatusCode().value());
+			assertFalse(pendingRecommendations.queryForObject(
+					"select processed from recommendation_outbox", Boolean.class));
+			responseGate.countDown();
+			assertAttempts(3);
+		} finally {
+			responseGate.countDown();
 		}
 	}
 
@@ -1147,7 +1175,7 @@ class PricingPersistenceH2Tests {
 			try {
 				await().atMost(Duration.ofSeconds(3)).until(() -> attempts.get() >= 3);
 				await().during(Duration.ofMillis(300)).atMost(Duration.ofSeconds(2))
-						.untilAsserted(() -> assertFalse(startup.isDone()));
+						.untilAsserted(() -> assertTrue(startup.isDone()));
 				mockMvc.perform(post("/api/v1/work-available")).andExpect(status().isAccepted());
 				assertTrue(PricingServiceTests.COMPLETED_BEFORE_EVALUATION.isEmpty());
 				assertFalse(accounts.queryForObject("select processed from batch_outbox", Boolean.class));
@@ -1156,7 +1184,8 @@ class PricingPersistenceH2Tests {
 				startup.get(5, TimeUnit.SECONDS);
 			}
 		}
-		assertTrue(accounts.queryForObject("select processed from batch_outbox", Boolean.class));
+		await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertTrue(
+				accounts.queryForObject("select processed from batch_outbox", Boolean.class)));
 		assertEquals(1, recommendations.queryForObject(
 				"select count(*) from recommendation_outbox", Integer.class));
 	}
@@ -1808,7 +1837,11 @@ class PricingPersistenceH2Tests {
 						+ TRANSACTION_PROCESSOR.getAddress().getPort() + "/api/v1/mock/txn/wake",
 				"--TRANSACTION_PROCESSOR_RETRY_DELAY=50ms",
 				"--TRANSACTION_PROCESSOR_HTTP_TIMEOUT=100ms"));
-		arguments.addAll(List.of(properties));
+		for (String property : properties) {
+			String name = property.substring(0, property.indexOf('=') + 1);
+			arguments.removeIf(argument -> argument.startsWith(name));
+			arguments.add(property);
+		}
 		return new SpringApplicationBuilder(
 				EngineApplication.class, PricingServiceTests.Configuration.class)
 				.properties("server.port=0", "engine.max-workers=1")

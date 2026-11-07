@@ -101,7 +101,7 @@ class PricingPersistencePostgresTests {
 		}
 		String accountUrl = url("accountdb");
 		Flyway.configure().dataSource(accountUrl, POSTGRES.getUsername(), POSTGRES.getPassword())
-				.locations("classpath:account-store").load().migrate();
+				.locations("classpath:db/account").load().migrate();
 		properties.add("transaction-processor.wake-up-url", () ->
 				"http://localhost:" + TRANSACTION_PROCESSOR.getAddress().getPort()
 						+ "/api/v1/mock/txn/wake");

@@ -96,11 +96,13 @@ public class EngineService implements SmartInitializingSingleton {
 
 	@Override
 	public void afterSingletonsInstantiated() {
-		if (retryDatabaseOperation(recommendationRepository::existsByProcessedFalse,
-				recommendationRepository::checkConnection)) {
-			Thread.startVirtualThread(this::notifyTransactionProcessor);
-		}
-		processPendingAccounts();
+		Thread.startVirtualThread(() -> {
+			if (retryDatabaseOperation(recommendationRepository::existsByProcessedFalse,
+					recommendationRepository::checkConnection)) {
+				Thread.startVirtualThread(this::notifyTransactionProcessor);
+			}
+			processPendingAccounts();
+		});
 	}
 
 	public void processPendingAccounts() {

@@ -1,5 +1,6 @@
 package com.pricing.engine.config;
 
+import java.sql.SQLException;
 import java.util.Map;
 
 import javax.sql.DataSource;
@@ -36,9 +37,26 @@ public class RecommendationStoreConfiguration {
 
 	@Bean(defaultCandidate = false, initMethod = "migrate")
 	public Flyway recommendationFlyway(
-			@Qualifier("recommendationDataSource") DataSource dataSource) {
-		return Flyway.configure().dataSource(dataSource)
-				.locations("classpath:db/recommendation").load();
+			@Qualifier("recommendationDataSourceProperties") DataSourceProperties runtime,
+			@Qualifier("initializationDataSourceProperties") DataSourceProperties initialization,
+			@Value("${database-initialization.enabled:true}") boolean initialize,
+			@Value("${recommendation-store.txn-processor.username:recommendationdb_txn_processor}")
+			String processorUser,
+			@Value("${recommendation-store.txn-processor.password:recommendationpass}")
+			String processorPassword) throws SQLException {
+		DataSourceProperties credentials = initialize ? initialization : runtime;
+		String database = initialize ? ConfigurationStoreConfiguration.initializeDatabase(
+				runtime, initialization, processorUser, processorPassword) : null;
+		var migrations = Flyway.configure().dataSource(runtime.getUrl(), credentials.getUsername(),
+				credentials.getPassword())
+				.locations("classpath:db/recommendation");
+		if (initialize) {
+			migrations.locations("classpath:db/recommendation", "classpath:db/recommendation-postgresql")
+					.placeholders(Map.of("processorLogin", processorUser.replace("\"", "\"\""),
+							"engineLogin", runtime.getUsername().replace("\"", "\"\""),
+							"recommendationDatabase", database.replace("\"", "\"\"")));
+		}
+		return migrations.load();
 	}
 
 	@Bean(defaultCandidate = false)

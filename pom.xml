@@ -98,19 +98,6 @@
             <testResource>
                 <directory>src/test/resources</directory>
             </testResource>
-            <testResource>
-                <directory>../pricing-backend/src/main/resources</directory>
-                <includes>
-                    <include>db/migration/**</include>
-                </includes>
-            </testResource>
-            <testResource>
-                <directory>../pricing-mock-server/src/main/resources/db/migration</directory>
-                <targetPath>account-store</targetPath>
-                <includes>
-                    <include>V*__*.sql</include>
-                </includes>
-            </testResource>
         </testResources>
         <plugins>
             <plugin>
