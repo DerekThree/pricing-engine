@@ -4,7 +4,7 @@ import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
-import com.pricing.engine.ruleEngine.PriceConfig.FeeType;
+import com.pricing.engine.ruleEngine.Pricing.FeeType;
 
 import jakarta.persistence.CollectionTable;
 import jakarta.persistence.Column;

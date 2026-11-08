@@ -16,7 +16,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 @Configuration(proxyBeanMethods = false)
-public class ConfigurationStoreConfiguration {
+public class PricingStoreConfiguration {
 
 	@Bean(defaultCandidate = false)
 	@ConfigurationProperties("database-initialization.datasource")
@@ -28,8 +28,8 @@ public class ConfigurationStoreConfiguration {
 	@ConditionalOnProperty(name = "database-initialization.enabled", matchIfMissing = true)
 	public Flyway flyway(DataSourceProperties runtime,
 			@Qualifier("initializationDataSourceProperties") DataSourceProperties initialization,
-			@Value("${configuration-store.backend.username}") String backendUser,
-			@Value("${configuration-store.backend.password}") String backendPassword)
+			@Value("${pricing-store.backend.username}") String backendUser,
+			@Value("${pricing-store.backend.password}") String backendPassword)
 			throws SQLException {
 		String database = initializeDatabase(runtime, initialization, backendUser, backendPassword);
 		return Flyway.configure().dataSource(runtime.getUrl(), initialization.getUsername(),

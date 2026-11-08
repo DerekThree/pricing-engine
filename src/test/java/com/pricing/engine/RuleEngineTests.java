@@ -9,7 +9,7 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import com.pricing.engine.ruleEngine.PriceConfig;
+import com.pricing.engine.ruleEngine.Pricing;
 import com.pricing.engine.ruleEngine.RuleEngine;
 import com.pricing.engine.ruleEngine.RuleEngineRepository;
 import com.pricing.engine.ruleEngine.RuleEngineBatch;
@@ -20,15 +20,15 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
-import static com.pricing.engine.ruleEngine.PriceConfig.AttributeDefinition;
-import static com.pricing.engine.ruleEngine.PriceConfig.AttributeType;
-import static com.pricing.engine.ruleEngine.PriceConfig.Branch;
-import static com.pricing.engine.ruleEngine.PriceConfig.EligibilityCondition;
-import static com.pricing.engine.ruleEngine.PriceConfig.EligibilityReason;
-import static com.pricing.engine.ruleEngine.PriceConfig.FeeType;
-import static com.pricing.engine.ruleEngine.PriceConfig.Plan;
-import static com.pricing.engine.ruleEngine.PriceConfig.PlanFee;
-import static com.pricing.engine.ruleEngine.PriceConfig.Region;
+import static com.pricing.engine.ruleEngine.Pricing.AttributeDefinition;
+import static com.pricing.engine.ruleEngine.Pricing.AttributeType;
+import static com.pricing.engine.ruleEngine.Pricing.Branch;
+import static com.pricing.engine.ruleEngine.Pricing.EligibilityCondition;
+import static com.pricing.engine.ruleEngine.Pricing.EligibilityReason;
+import static com.pricing.engine.ruleEngine.Pricing.FeeType;
+import static com.pricing.engine.ruleEngine.Pricing.Plan;
+import static com.pricing.engine.ruleEngine.Pricing.PlanFee;
+import static com.pricing.engine.ruleEngine.Pricing.Region;
 import static com.pricing.engine.ruleEngine.RuleEngineBatch.*;
 import static com.pricing.engine.ruleEngine.RuleEngineBatchResult.*;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -39,7 +39,7 @@ import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 import static org.junit.jupiter.params.provider.Arguments.arguments;
 
-class PrototypeRuleEngineTests {
+class RuleEngineTests {
 
 	private static final UUID BATCH_ID = UUID.fromString("5fd2879b-7f17-4a05-8fbe-7ebce6958f3b");
 	private static final LocalDate AUGUST_1 = LocalDate.of(2026, 8, 1);
@@ -49,9 +49,9 @@ class PrototypeRuleEngineTests {
 
 	@Test
 	void pricesOneFlatFeeAtInclusiveActiveThroughBoundary() {
-		PriceConfig config = config(
+		Pricing pricing = pricing(
 				plan("PLAN0001", "PROD0001", "REGION001", AUGUST_1, AUGUST_31));
-		RuleEngineRepository repository = repository(config);
+		RuleEngineRepository repository = repository(pricing);
 		RuleEngine engine = new RuleEngine(repository);
 
 		RuleEngineBatchResult result = engine.price(batch("PROD0001", "BRANCH001", AUGUST_31));
@@ -62,11 +62,11 @@ class PrototypeRuleEngineTests {
 	}
 
 	@Test
-	void usesOneRepositoryConfigurationForEveryAccountAndFeeRequest() {
-		PriceConfig config = config(plan(List.of(
+	void usesOnePricingReadForEveryAccountAndFeeRequest() {
+		Pricing pricing = pricing(plan(List.of(
 				flatFee("FEE00001"),
 				flatFee("FEE00002"))));
-		RuleEngineRepository repository = repository(config);
+		RuleEngineRepository repository = repository(pricing);
 		RuleEngine engine = new RuleEngine(repository);
 		RuleEngineBatch batch = new RuleEngineBatch(BATCH_ID, List.of(
 				new Account(
@@ -111,64 +111,56 @@ class PrototypeRuleEngineTests {
 		verifyNoMoreInteractions(repository);
 	}
 
-	@Test
-	void returnsPlanNotFoundForAnInexactProductCode() {
-		PriceConfig config = config(
+	@ParameterizedTest
+	@MethodSource("unmatchedPlans")
+	void returnsPlanNotFoundForAnUnmatchedProductOrDate(String productCode, LocalDate pricingDate) {
+		Pricing pricing = pricing(
 				plan("PLAN0001", "PROD0001", "REGION001", AUGUST_1, AUGUST_31));
 
-		RuleEngineBatchResult result = price(config, "PROD0001 ", "BRANCH001", AUGUST_15);
+		RuleEngineBatchResult result = price(pricing, productCode, "BRANCH001", pricingDate);
 
 		assertEquals(failedResult(AccountStatus.PLAN_NOT_FOUND), result);
 	}
 
 	@Test
 	void returnsBranchNotFoundForAnInexactBranchCode() {
-		PriceConfig config = config(List.of(), List.of());
+		Pricing pricing = pricing(List.of(), List.of());
 
-		RuleEngineBatchResult result = price(config, "PROD0001", "branch001", AUGUST_15);
+		RuleEngineBatchResult result = price(pricing, "PROD0001", "branch001", AUGUST_15);
 
 		assertEquals(failedResult(AccountStatus.BRANCH_NOT_FOUND), result);
 	}
 
-	@Test
-	void resolvesRegionByZipCodeWhenNoDirectBranchMatches() {
-		PriceConfig config = config(
-				List.of(region("REGION001", Set.of(), Set.of("60459"), Set.of())),
+	@ParameterizedTest
+	@MethodSource("regionResolutionCases")
+	void resolvesRegionThroughZipCodeOrStateWhenNoHigherTierMatches(
+			Set<String> zipCodes, Set<String> states) {
+		Pricing pricing = pricing(
+				List.of(region("REGION001", Set.of(), zipCodes, states)),
 				List.of(plan("PLAN0001", "PROD0001", "REGION001", AUGUST_1, AUGUST_31)));
 
-		RuleEngineBatchResult result = price(config, "PROD0001", "BRANCH001", AUGUST_15);
-
-		assertEquals(chargedResult("PLAN0001"), result);
-	}
-
-	@Test
-	void resolvesRegionByStateWhenNoBranchOrZipCodeMatches() {
-		PriceConfig config = config(
-				List.of(region("REGION001", Set.of(), Set.of(), Set.of("IL"))),
-				List.of(plan("PLAN0001", "PROD0001", "REGION001", AUGUST_1, AUGUST_31)));
-
-		RuleEngineBatchResult result = price(config, "PROD0001", "BRANCH001", AUGUST_15);
+		RuleEngineBatchResult result = price(pricing, "PROD0001", "BRANCH001", AUGUST_15);
 
 		assertEquals(chargedResult("PLAN0001"), result);
 	}
 
 	@Test
 	void stopsAfterTheFirstRegionTierContainingAMatch() {
-		PriceConfig config = config(
+		Pricing pricing = pricing(
 				List.of(
 						region("REGION001", Set.of("BRANCH001"), Set.of(), Set.of()),
 						region("REGION002", Set.of(), Set.of("60459"), Set.of()),
 						region("REGION003", Set.of(), Set.of("60459"), Set.of("IL"))),
 				List.of(plan("PLAN0001", "PROD0001", "REGION001", AUGUST_1, AUGUST_31)));
 
-		RuleEngineBatchResult result = price(config, "PROD0001", "BRANCH001", AUGUST_15);
+		RuleEngineBatchResult result = price(pricing, "PROD0001", "BRANCH001", AUGUST_15);
 
 		assertEquals(chargedResult("PLAN0001"), result);
 	}
 
 	@Test
 	void returnsRegionNotFoundWhenNoRegionTierMatches() {
-		RuleEngineBatchResult result = price(config(List.of(), List.of()),
+		RuleEngineBatchResult result = price(pricing(List.of(), List.of()),
 				"PROD0001", "BRANCH001", AUGUST_15);
 
 		assertEquals(failedResult(AccountStatus.REGION_NOT_FOUND), result);
@@ -176,80 +168,51 @@ class PrototypeRuleEngineTests {
 
 	@Test
 	void returnsErrorWhenTheWinningRegionTierIsAmbiguous() {
-		PriceConfig config = config(
+		Pricing pricing = pricing(
 				List.of(
 						region("REGION001", Set.of("BRANCH001"), Set.of(), Set.of()),
 						region("REGION002", Set.of("BRANCH001"), Set.of(), Set.of())),
 				List.of());
 
-		RuleEngineBatchResult result = price(config, "PROD0001", "BRANCH001", AUGUST_15);
+		RuleEngineBatchResult result = price(pricing, "PROD0001", "BRANCH001", AUGUST_15);
 
 		assertEquals(failedResult(AccountStatus.ERROR), result);
 	}
 
 	@Test
 	void selectsPlanByExactProductRegionAndInclusiveActiveFromBoundary() {
-		PriceConfig config = config(
+		Pricing pricing = pricing(
 				plan("PLAN0001", "PROD0001", "REGION001", AUGUST_1, AUGUST_31),
 				plan("PLAN0002", "PROD0002", "REGION001", AUGUST_1, AUGUST_31),
 				plan("PLAN0003", "PROD0001", "REGION002", AUGUST_1, AUGUST_31),
 				plan("PLAN0004", "PROD0001", "REGION001", AUGUST_15, AUGUST_31));
 
-		RuleEngineBatchResult result = price(config, "PROD0001", "BRANCH001", AUGUST_1);
+		RuleEngineBatchResult result = price(pricing, "PROD0001", "BRANCH001", AUGUST_1);
 
 		assertEquals(chargedResult("PLAN0001"), result);
 	}
 
 	@Test
-	void returnsPlanNotFoundWhenNoPlanMatchesProductRegionAndPricingDate() {
-		PriceConfig config = config(
-				plan("PLAN0001", "PROD0001", "REGION001", AUGUST_1, AUGUST_31));
-
-		RuleEngineBatchResult result = price(config, "PROD0001", "BRANCH001",
-				LocalDate.of(2026, 9, 1));
-
-		assertEquals(failedResult(AccountStatus.PLAN_NOT_FOUND), result);
-	}
-
-	@Test
 	void returnsErrorWhenMultiplePricingPlansApply() {
-		PriceConfig config = config(
+		Pricing pricing = pricing(
 				plan("PLAN0001", "PROD0001", "REGION001", AUGUST_1, AUGUST_31),
 				plan("PLAN0002", "PROD0001", "REGION001", AUGUST_15,
 						LocalDate.of(2026, 9, 15)));
 
-		RuleEngineBatchResult result = price(config, "PROD0001", "BRANCH001", AUGUST_15);
+		RuleEngineBatchResult result = price(pricing, "PROD0001", "BRANCH001", AUGUST_15);
 
 		assertEquals(failedResult(AccountStatus.ERROR), result);
 	}
 
-	@Test
-	void returnsMissingAttributeWhenARequestedPlanFeeRequiresAnAbsentAttribute() {
+	@ParameterizedTest
+	@MethodSource("invalidRequestedFeeAttributes")
+	void returnsExpectedStatusForInvalidRequestedFeeAttributes(
+			List<AccountAttribute> attributes, AccountStatus expectedStatus) {
 		RuleEngineBatchResult result = price(
 				fee("FEE00001", new AttributeDefinition("ATTR0001", AttributeType.TEXT)),
-				List.of());
+				attributes);
 
-		assertEquals(failedResult(AccountStatus.MISSING_ATTRIBUTE), result);
-	}
-
-	@Test
-	void returnsDuplicateAttribute() {
-		RuleEngineBatchResult result = price(
-				fee("FEE00001", new AttributeDefinition("ATTR0001", AttributeType.TEXT)),
-				List.of(
-						new AccountAttribute("ATTR0001", "FIRST"),
-						new AccountAttribute("ATTR0001", "SECOND")));
-
-		assertEquals(failedResult(AccountStatus.DUPLICATE_ATTRIBUTE), result);
-	}
-
-	@Test
-	void returnsInvalidAttributeType() {
-		RuleEngineBatchResult result = price(
-				fee("FEE00001", new AttributeDefinition("ATTR0001", AttributeType.TEXT)),
-				List.of(new AccountAttribute("ATTR0001", true)));
-
-		assertEquals(failedResult(AccountStatus.INVALID_ATTRIBUTE_TYPE), result);
+		assertEquals(failedResult(expectedStatus), result);
 	}
 
 	@ParameterizedTest
@@ -264,11 +227,11 @@ class PrototypeRuleEngineTests {
 
 	@Test
 	void doesNotRequireAttributesForAnUnrequestedPlanFee() {
-		PriceConfig config = config(
+		Pricing pricing = pricing(
 				fee("FEE00001", new AttributeDefinition("ATTR0001", AttributeType.TEXT)),
 				flatFee("FEE00002"));
 
-		RuleEngineBatchResult result = price(config, batch(
+		RuleEngineBatchResult result = price(pricing, batch(
 				List.of(),
 				List.of(new FeeRequest(1L, "FEE00002", null))));
 
@@ -277,48 +240,24 @@ class PrototypeRuleEngineTests {
 
 	@Test
 	void returnsFeeNotFoundWithoutCreatingAnAttributeRequirementForAnAbsentPlanFee() {
-		PriceConfig config = config(
+		Pricing pricing = pricing(
 				fee("FEE00001", new AttributeDefinition("ATTR0001", AttributeType.TEXT)));
 
-		RuleEngineBatchResult result = price(config, batch(
+		RuleEngineBatchResult result = price(pricing, batch(
 				List.of(),
 				List.of(new FeeRequest(1L, "FEE99999", null))));
 
 		assertEquals(okResult(failedFee(FeeStatus.FEE_NOT_FOUND)), result);
 	}
 
-	@Test
-	void pricesFivePercentFeeWithDecimalArithmeticAndHalfUpRounding() {
-		FeeResult result = priceFee(
-				percentageFee("FEE00001", "5.0000"),
-				new BigDecimal("123.45"));
-
-		assertEquals(chargedFee("6.17"), result);
-	}
-
-	@Test
-	void returnsMissingTransactionWithoutPercentageDecisionFields() {
-		FeeResult result = priceFee(percentageFee("FEE00001", "5.0000"), null);
-
-		assertEquals(failedFee(FeeStatus.MISSING_TRANSACTION), result);
-	}
-
-	@Test
-	void acceptsZeroTransactionAmountForAPercentageFee() {
-		FeeResult result = priceFee(
-				percentageFee("FEE00001", "5.0000"),
-				new BigDecimal("0.00"));
-
-		assertEquals(chargedFee("0.00"), result);
-	}
-
-	@Test
-	void waivesPercentageFeeAfterValidatingTransactionAmount() {
-		FeeResult result = priceFee(
-				percentageFee("FEE00001", "5.0000", reason("ALWAYS")),
-				new BigDecimal("10.00"));
-
-		assertEquals(waivedFee("ALWAYS"), result);
+	@ParameterizedTest(name = "{0}")
+	@MethodSource("percentageFees")
+	void pricesPercentageFees(
+			String scenario, BigDecimal amount, boolean waived, FeeResult expected) {
+		PlanFee fee = waived
+				? percentageFee("FEE00001", "5.0000", reason("ALWAYS"))
+				: percentageFee("FEE00001", "5.0000");
+		assertEquals(expected, priceFee(fee, amount));
 	}
 
 	@ParameterizedTest
@@ -378,15 +317,17 @@ class PrototypeRuleEngineTests {
 		assertEquals(waivedResult("ALWAYS"), result);
 	}
 
-	@Test
-	void returnsInvalidEligibilityConditionForAnInvalidOperatorAndTypeCombination() {
-		PriceConfig config = config(
+	@ParameterizedTest
+	@MethodSource("invalidConditions")
+	void rejectsInvalidEligibilityConditionsWithoutAffectingOtherFees(
+			AttributeType type, Object accountValue, String operator, String conditionValue) {
+		Pricing pricing = pricing(
 				feeWithReasons("FEE00001", reason("INVALID",
-						condition("ATTR0001", AttributeType.BOOLEAN, ">", "false"))),
+						condition("ATTR0001", type, operator, conditionValue))),
 				flatFee("FEE00002"));
 
-		RuleEngineBatchResult result = price(config, batch(
-				List.of(new AccountAttribute("ATTR0001", true)),
+		RuleEngineBatchResult result = price(pricing, batch(
+				List.of(new AccountAttribute("ATTR0001", accountValue)),
 				List.of(
 						new FeeRequest(1L, "FEE00001", null),
 						new FeeRequest(2L, "FEE00002", null))));
@@ -398,39 +339,27 @@ class PrototypeRuleEngineTests {
 				result);
 	}
 
-	@ParameterizedTest
-	@MethodSource("invalidConditionValues")
-	void returnsInvalidEligibilityConditionForAnInvalidPersistedConditionValue(
-			AttributeType type, Object accountValue, String conditionValue) {
-		RuleEngineBatchResult result = price(
-				feeWithReasons("FEE00001", reason("INVALID",
-						condition("ATTR0001", type, "=", conditionValue))),
-				List.of(new AccountAttribute("ATTR0001", accountValue)));
-
-		assertEquals(okResult(failedFee(FeeStatus.INVALID_ELIGIBILITY_CONDITION)), result);
-	}
-
 	private RuleEngineBatchResult price(
-			PriceConfig config,
+			Pricing pricing,
 			String productCode,
 			String branchCode,
 			LocalDate pricingDate) {
-		return new RuleEngine(repository(config))
+		return new RuleEngine(repository(pricing))
 				.price(batch(productCode, branchCode, pricingDate));
 	}
 
-	private RuleEngineBatchResult price(PriceConfig config, RuleEngineBatch batch) {
-		return new RuleEngine(repository(config)).price(batch);
+	private RuleEngineBatchResult price(Pricing pricing, RuleEngineBatch batch) {
+		return new RuleEngine(repository(pricing)).price(batch);
 	}
 
 	private RuleEngineBatchResult price(PlanFee fee, List<AccountAttribute> attributes) {
-		return price(config(fee), batch(
+		return price(pricing(fee), batch(
 				attributes,
 				List.of(new FeeRequest(1L, fee.code(), null))));
 	}
 
 	private FeeResult priceFee(PlanFee fee, BigDecimal transactionAmount) {
-		return price(config(fee), batch(
+		return price(pricing(fee), batch(
 				List.of(),
 				List.of(new FeeRequest(1L, fee.code(), transactionAmount))))
 				.accounts().getFirst().fees().getFirst();
@@ -456,21 +385,21 @@ class PrototypeRuleEngineTests {
 				fees)));
 	}
 
-	private PriceConfig config(List<Region> regions, List<Plan> plans) {
-		return new PriceConfig(
+	private Pricing pricing(List<Region> regions, List<Plan> plans) {
+		return new Pricing(
 				Map.of("BRANCH001", BRANCH),
 				regions,
 				plans);
 	}
 
-	private PriceConfig config(PlanFee... fees) {
-		return config(
+	private Pricing pricing(PlanFee... fees) {
+		return pricing(
 				List.of(region("REGION001", Set.of("BRANCH001"), Set.of(), Set.of())),
 				List.of(plan(List.of(fees))));
 	}
 
-	private PriceConfig config(Plan... plans) {
-		return config(
+	private Pricing pricing(Plan... plans) {
+		return pricing(
 				List.of(region("REGION001", Set.of("BRANCH001"), Set.of(), Set.of())),
 				List.of(plans));
 	}
@@ -598,6 +527,22 @@ class PrototypeRuleEngineTests {
 				"ACCOUNT001", status, null, null)));
 	}
 
+	private static Stream<Arguments> regionResolutionCases() {
+		return Stream.of(
+				arguments(Set.of("60459"), Set.of()),
+				arguments(Set.of(), Set.of("IL")));
+	}
+
+	private static Stream<Arguments> invalidRequestedFeeAttributes() {
+		return Stream.of(
+				arguments(List.of(), AccountStatus.MISSING_ATTRIBUTE),
+				arguments(List.of(
+						new AccountAttribute("ATTR0001", "FIRST"),
+						new AccountAttribute("ATTR0001", "SECOND")), AccountStatus.DUPLICATE_ATTRIBUTE),
+				arguments(List.of(new AccountAttribute("ATTR0001", true)),
+						AccountStatus.INVALID_ATTRIBUTE_TYPE));
+	}
+
 	private static Stream<Arguments> validAttributeValues() {
 		return Stream.of(
 				arguments(AttributeType.TEXT, " Value "),
@@ -633,17 +578,36 @@ class PrototypeRuleEngineTests {
 				arguments(AttributeType.DATE, "2026-08-15", "<=", "2026-08-15"));
 	}
 
-	private static Stream<Arguments> invalidConditionValues() {
+	private static Stream<Arguments> unmatchedPlans() {
 		return Stream.of(
-				arguments(AttributeType.BOOLEAN, true, "not-a-boolean"),
-				arguments(AttributeType.DECIMAL, new BigDecimal("1"), "not-a-number"),
-				arguments(AttributeType.INTEGER, new BigDecimal("1"), "1.5"),
-				arguments(AttributeType.DATE, "2026-08-15", "not-a-date"));
+				arguments("PROD0001 ", AUGUST_15),
+				arguments("PROD0001", LocalDate.of(2026, 9, 1)));
 	}
 
-	private static RuleEngineRepository repository(PriceConfig config) {
+	private static Stream<Arguments> percentageFees() {
+		return Stream.of(
+				arguments("half-up rounding", new BigDecimal("123.45"), false,
+						new FeeResult(1L, FeeStatus.OK, Decision.CHARGED, new BigDecimal("6.17"), null)),
+				arguments("missing transaction", null, false,
+						new FeeResult(1L, FeeStatus.MISSING_TRANSACTION, null, null, null)),
+				arguments("zero amount", new BigDecimal("0.00"), false,
+						new FeeResult(1L, FeeStatus.OK, Decision.CHARGED, new BigDecimal("0.00"), null)),
+				arguments("waived", new BigDecimal("10.00"), true,
+						new FeeResult(1L, FeeStatus.OK, Decision.WAIVED, null, List.of("ALWAYS"))));
+	}
+
+	private static Stream<Arguments> invalidConditions() {
+		return Stream.of(
+				arguments(AttributeType.BOOLEAN, true, ">", "false"),
+				arguments(AttributeType.BOOLEAN, true, "=", "not-a-boolean"),
+				arguments(AttributeType.DECIMAL, new BigDecimal("1"), "=", "not-a-number"),
+				arguments(AttributeType.INTEGER, new BigDecimal("1"), "=", "1.5"),
+				arguments(AttributeType.DATE, "2026-08-15", "=", "not-a-date"));
+	}
+
+	private static RuleEngineRepository repository(Pricing pricing) {
 		RuleEngineRepository repository = mock(RuleEngineRepository.class);
-		when(repository.load(anySet())).thenReturn(config);
+		when(repository.load(anySet())).thenReturn(pricing);
 		return repository;
 	}
 }

@@ -10,29 +10,29 @@ import com.pricing.engine.pricingStore.EligibilityReasonEntity;
 import com.pricing.engine.pricingStore.PricingPlanEntity;
 import com.pricing.engine.pricingStore.PricingPlanFeeEntity;
 import com.pricing.engine.pricingStore.RegionEntity;
-import com.pricing.engine.ruleEngine.PriceConfig;
-import com.pricing.engine.ruleEngine.PriceConfig.AttributeDefinition;
-import com.pricing.engine.ruleEngine.PriceConfig.AttributeType;
-import com.pricing.engine.ruleEngine.PriceConfig.Branch;
-import com.pricing.engine.ruleEngine.PriceConfig.EligibilityCondition;
-import com.pricing.engine.ruleEngine.PriceConfig.EligibilityReason;
-import com.pricing.engine.ruleEngine.PriceConfig.FeeType;
-import com.pricing.engine.ruleEngine.PriceConfig.Plan;
-import com.pricing.engine.ruleEngine.PriceConfig.PlanFee;
-import com.pricing.engine.ruleEngine.PriceConfig.Region;
+import com.pricing.engine.ruleEngine.Pricing;
+import com.pricing.engine.ruleEngine.Pricing.AttributeDefinition;
+import com.pricing.engine.ruleEngine.Pricing.AttributeType;
+import com.pricing.engine.ruleEngine.Pricing.Branch;
+import com.pricing.engine.ruleEngine.Pricing.EligibilityCondition;
+import com.pricing.engine.ruleEngine.Pricing.EligibilityReason;
+import com.pricing.engine.ruleEngine.Pricing.FeeType;
+import com.pricing.engine.ruleEngine.Pricing.Plan;
+import com.pricing.engine.ruleEngine.Pricing.PlanFee;
+import com.pricing.engine.ruleEngine.Pricing.Region;
 
 import org.springframework.stereotype.Component;
 
 @Component
-class PriceConfigMapper {
+class PricingMapper {
 
-	PriceConfig toPriceConfig(
+	Pricing toPricing(
 			List<BranchEntity> branches,
 			List<RegionEntity> regions,
 			List<PricingPlanEntity> pricingPlans) {
 		Map<Long, String> branchCodesById = branches.stream()
 				.collect(Collectors.toMap(BranchEntity::getId, BranchEntity::getBranchCode));
-		return new PriceConfig(
+		return new Pricing(
 				branches.stream().collect(Collectors.toMap(
 						BranchEntity::getBranchCode,
 						this::toBranch)),

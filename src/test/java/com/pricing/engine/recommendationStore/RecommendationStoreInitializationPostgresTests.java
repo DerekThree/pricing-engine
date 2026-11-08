@@ -1,4 +1,4 @@
-package com.pricing.engine;
+package com.pricing.engine.recommendationStore;
 
 import java.net.ServerSocket;
 import java.sql.DriverManager;
@@ -9,7 +9,8 @@ import java.util.UUID;
 
 import javax.sql.DataSource;
 
-import com.pricing.engine.config.ConfigurationStoreConfiguration;
+import com.pricing.engine.EngineApplication;
+import com.pricing.engine.config.PricingStoreConfiguration;
 import com.pricing.engine.config.RecommendationStoreConfiguration;
 import com.pricing.engine.recommendationStore.RecommendationMapper;
 import com.pricing.engine.recommendationStore.RecommendationRepository;
@@ -39,7 +40,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 @Testcontainers(disabledWithoutDocker = true)
-class RecommendationStorePostgresTests {
+class RecommendationStoreInitializationPostgresTests {
 
 	private static final List<String> TABLES = List.of("recommendation_outbox",
 			"account_recommendations", "fee_request_recommendations",
@@ -63,7 +64,7 @@ class RecommendationStorePostgresTests {
 			.withConfiguration(AutoConfigurations.of(ConfigurationPropertiesAutoConfiguration.class,
 					DataSourceAutoConfiguration.class, FlywayAutoConfiguration.class,
 					HibernateJpaAutoConfiguration.class, TransactionAutoConfiguration.class))
-			.withUserConfiguration(ConfigurationStoreConfiguration.class,
+			.withUserConfiguration(PricingStoreConfiguration.class,
 					RecommendationStoreConfiguration.class, RecommendationMapper.class,
 					RecommendationRepository.class)
 			.withPropertyValues(
@@ -71,11 +72,11 @@ class RecommendationStorePostgresTests {
 					"database-initialization.datasource.url=" + POSTGRES.getJdbcUrl(),
 					"database-initialization.datasource.username=store_initializer",
 					"database-initialization.datasource.password=initialization-password",
-					"configuration-store.backend.username=pricingdb_backend",
-					"configuration-store.backend.password=backend-password",
+					"pricing-store.backend.username=pricingdb_backend",
+					"pricing-store.backend.password=backend-password",
 					"spring.datasource.url=" + databaseUrl("pricingdb"),
 					"spring.datasource.username=pricingdb_engine",
-					"spring.datasource.password=configuration-engine-password",
+					"spring.datasource.password=pricing-engine-password",
 					"spring.jpa.hibernate.ddl-auto=none",
 					"recommendation-store.datasource.url=" + databaseUrl("recommendationdb"),
 					"recommendation-store.datasource.username=recommendationdb_engine",
@@ -196,11 +197,11 @@ class RecommendationStorePostgresTests {
 					"--database-initialization.datasource.url=" + POSTGRES.getJdbcUrl(),
 					"--database-initialization.datasource.username=store_initializer",
 					"--database-initialization.datasource.password=initialization-password",
-					"--configuration-store.backend.username=pricingdb_backend",
-					"--configuration-store.backend.password=backend-password",
+					"--pricing-store.backend.username=pricingdb_backend",
+					"--pricing-store.backend.password=backend-password",
 					"--spring.datasource.url=" + databaseUrl("pricingdb_ready"),
 					"--spring.datasource.username=pricingdb_engine",
-					"--spring.datasource.password=configuration-engine-password",
+					"--spring.datasource.password=pricing-engine-password",
 					"--spring.datasource.driver-class-name=org.postgresql.Driver",
 					"--account-store.datasource.url=" + databaseUrl("accountdb_ready"),
 					"--account-store.datasource.username=accountdb_engine",

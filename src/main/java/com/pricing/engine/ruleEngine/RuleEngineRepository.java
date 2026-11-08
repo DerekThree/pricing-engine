@@ -5,5 +5,5 @@ import java.util.Set;
 
 public interface RuleEngineRepository {
 
-	PriceConfig load(Set<LocalDate> pricingDates);
+	Pricing load(Set<LocalDate> pricingDates);
 }

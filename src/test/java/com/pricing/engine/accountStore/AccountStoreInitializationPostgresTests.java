@@ -1,4 +1,4 @@
-package com.pricing.engine;
+package com.pricing.engine.accountStore;
 
 import java.sql.DriverManager;
 import java.sql.SQLException;
@@ -8,7 +8,7 @@ import java.util.UUID;
 import javax.sql.DataSource;
 
 import com.pricing.engine.config.AccountStoreConfiguration;
-import com.pricing.engine.config.ConfigurationStoreConfiguration;
+import com.pricing.engine.config.PricingStoreConfiguration;
 import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.FlywayException;
 import org.junit.jupiter.api.BeforeAll;
@@ -29,7 +29,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 @Testcontainers(disabledWithoutDocker = true)
-class AccountStorePostgresTests {
+class AccountStoreInitializationPostgresTests {
 
 	private static final List<String> TABLES = List.of("accounts", "account_attributes",
 			"fee_requests", "batch_outbox");
@@ -52,17 +52,17 @@ class AccountStorePostgresTests {
 			.withConfiguration(AutoConfigurations.of(ConfigurationPropertiesAutoConfiguration.class,
 					DataSourceAutoConfiguration.class, FlywayAutoConfiguration.class,
 					HibernateJpaAutoConfiguration.class))
-			.withUserConfiguration(ConfigurationStoreConfiguration.class, AccountStoreConfiguration.class)
+			.withUserConfiguration(PricingStoreConfiguration.class, AccountStoreConfiguration.class)
 			.withPropertyValues(
 					"database-initialization.enabled=true",
 					"database-initialization.datasource.url=" + POSTGRES.getJdbcUrl(),
 					"database-initialization.datasource.username=store_initializer",
 					"database-initialization.datasource.password=initialization-password",
-					"configuration-store.backend.username=pricingdb_backend",
-					"configuration-store.backend.password=backend-password",
+					"pricing-store.backend.username=pricingdb_backend",
+					"pricing-store.backend.password=backend-password",
 					"spring.datasource.url=" + databaseUrl("pricingdb"),
 					"spring.datasource.username=pricingdb_engine",
-					"spring.datasource.password=configuration-engine-password",
+					"spring.datasource.password=pricing-engine-password",
 					"spring.jpa.hibernate.ddl-auto=none",
 					"account-store.datasource.url=" + databaseUrl("accountdb"),
 					"account-store.datasource.username=accountdb_engine",

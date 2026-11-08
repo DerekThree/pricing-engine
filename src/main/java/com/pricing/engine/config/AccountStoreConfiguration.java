@@ -43,7 +43,7 @@ public class AccountStoreConfiguration {
 			@Qualifier("initializationDataSourceProperties") DataSourceProperties initialization,
 			@Value("${account-store.mock-server.username}") String mockUser,
 			@Value("${account-store.mock-server.password}") String mockPassword) throws SQLException {
-		String database = ConfigurationStoreConfiguration.initializeDatabase(
+		String database = PricingStoreConfiguration.initializeDatabase(
 				runtime, initialization, mockUser, mockPassword);
 		return Flyway.configure().dataSource(runtime.getUrl(), initialization.getUsername(),
 				initialization.getPassword())

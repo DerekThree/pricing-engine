@@ -1,4 +1,4 @@
-package com.pricing.engine;
+package com.pricing.engine.pricingStore;
 
 import java.sql.DriverManager;
 import java.sql.SQLException;
@@ -6,7 +6,7 @@ import java.util.List;
 
 import javax.sql.DataSource;
 
-import com.pricing.engine.config.ConfigurationStoreConfiguration;
+import com.pricing.engine.config.PricingStoreConfiguration;
 import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.FlywayException;
 import org.junit.jupiter.api.BeforeAll;
@@ -26,7 +26,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 @Testcontainers(disabledWithoutDocker = true)
-class ConfigurationStorePostgresTests {
+class PricingStoreInitializationPostgresTests {
 
 	private static final List<String> TABLES = List.of("branches", "products", "pricing_plans",
 			"regions", "region_branches", "region_states", "region_zip_codes", "account_attributes",
@@ -50,20 +50,20 @@ class ConfigurationStorePostgresTests {
 	private final ApplicationContextRunner application = new ApplicationContextRunner()
 			.withConfiguration(AutoConfigurations.of(ConfigurationPropertiesAutoConfiguration.class,
 					DataSourceAutoConfiguration.class, FlywayAutoConfiguration.class))
-			.withUserConfiguration(ConfigurationStoreConfiguration.class)
+			.withUserConfiguration(PricingStoreConfiguration.class)
 			.withPropertyValues(
 					"database-initialization.enabled=true",
 					"database-initialization.datasource.url=" + POSTGRES.getJdbcUrl(),
 					"database-initialization.datasource.username=store_initializer",
 					"database-initialization.datasource.password=initialization-password",
-					"configuration-store.backend.username=pricingdb_backend",
-					"configuration-store.backend.password=backend'password",
+					"pricing-store.backend.username=pricingdb_backend",
+					"pricing-store.backend.password=backend'password",
 					"spring.datasource.url=" + POSTGRES.getJdbcUrl().replace("/postgres", "/pricingdb"),
 					"spring.datasource.username=pricingdb_engine",
 					"spring.datasource.password=engine'password");
 
 	@Test
-	void initializesFreshConfigurationStoreAndLeavesAppliedMigrationsOnRestart() {
+	void initializesFreshPricingStoreAndLeavesAppliedMigrationsOnRestart() {
 		application.run(context -> {
 			assertThat(context).hasNotFailed();
 			DataSource engineDataSource = context.getBean(DataSource.class);

@@ -5,8 +5,6 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Proxy;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
@@ -63,6 +61,7 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import static com.pricing.engine.JdbcTestSupport.intercept;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -75,9 +74,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 @SpringBootTest(properties = "engine.max-workers=3")
 @AutoConfigureMockMvc
-@Import(PricingServiceTests.Configuration.class)
+@Import(MockPricing.class)
 @Testcontainers(disabledWithoutDocker = true)
-class PricingPersistencePostgresTests {
+class PersistencePostgresTests {
 
 	static final ExecutorService HTTP_EXECUTOR = Executors.newVirtualThreadPerTaskExecutor();
 	static final List<WakeUp> WAKE_UPS = new CopyOnWriteArrayList<>();
@@ -157,14 +156,14 @@ class PricingPersistencePostgresTests {
 			@Qualifier("recommendationDataSource") DataSource recommendationStore) {
 		accounts = new JdbcTemplate(accountStore);
 		recommendations = new JdbcTemplate(recommendationStore);
-		PricingPersistencePostgresTests.recommendationStore = recommendations;
+		PersistencePostgresTests.recommendationStore = recommendations;
 	}
 
 	@BeforeEach
 	void cleanUp() {
-		PricingServiceTests.configurationRead = () -> {};
-		PricingServiceTests.januaryAmount = "2.50";
-		PricingServiceTests.COMPLETED_BEFORE_EVALUATION.clear();
+		MockPricing.pricingRead = () -> {};
+		MockPricing.januaryAmount = "2.50";
+		MockPricing.COMPLETED_BEFORE_EVALUATION.clear();
 		WAKE_UPS.clear();
 		responses = new int[] {204};
 		responseDelayMillis = 0;
@@ -182,9 +181,9 @@ class PricingPersistencePostgresTests {
 		responseDelayMillis = 0;
 		await().during(Duration.ofMillis(500)).atMost(Duration.ofSeconds(3))
 				.until(() -> ACTIVE_REQUESTS.get() == 0);
-		PricingServiceTests.configurationRead = () -> {};
-		PricingServiceTests.januaryAmount = "2.50";
-		PricingServiceTests.COMPLETED_BEFORE_EVALUATION.clear();
+		MockPricing.pricingRead = () -> {};
+		MockPricing.januaryAmount = "2.50";
+		MockPricing.COMPLETED_BEFORE_EVALUATION.clear();
 	}
 
 	@AfterAll
@@ -194,15 +193,15 @@ class PricingPersistencePostgresTests {
 	}
 
 	@Test
-	void retriesAtomicStorageWithoutReloadingChangedConfiguration() throws Exception {
+	void retriesAtomicStorageWithoutReloadingChangedPricing() throws Exception {
 		addAccount(UUID.randomUUID());
 		failRecommendationWrites(2);
 		AtomicInteger connections = new AtomicInteger();
 		doAnswer(invocation -> {
 			Connection connection = (Connection) invocation.callRealMethod();
-			if (!PricingServiceTests.COMPLETED_BEFORE_EVALUATION.isEmpty()
+			if (!MockPricing.COMPLETED_BEFORE_EVALUATION.isEmpty()
 					&& connections.getAndIncrement() < 3) {
-				PricingServiceTests.januaryAmount = "9.99";
+				MockPricing.januaryAmount = "9.99";
 				try (var statement = connection.createStatement();
 						var rows = statement.executeQuery(
 								"select count(*) from recommendation_outbox")) {
@@ -217,8 +216,8 @@ class PricingPersistencePostgresTests {
 
 			assertEquals(3L, recommendations.queryForObject(
 					"select last_value from recommendation_write_attempts", Long.class));
-			assertEquals(1, PricingServiceTests.COMPLETED_BEFORE_EVALUATION.size());
-			assertEquals("9.99", PricingServiceTests.januaryAmount);
+			assertEquals(1, MockPricing.COMPLETED_BEFORE_EVALUATION.size());
+			assertEquals("9.99", MockPricing.januaryAmount);
 			assertEquals(new BigDecimal("2.50"), recommendations.queryForObject(
 					"select amount from fee_request_recommendations", BigDecimal.class));
 			assertEquals(1, recommendations.queryForObject(
@@ -247,8 +246,8 @@ class PricingPersistencePostgresTests {
 		}
 		recommendations.update("update recommendation_outbox set processed = ?", processed);
 		var committed = storedRecommendations(recommendations);
-		PricingServiceTests.januaryAmount = "9.99";
-		PricingServiceTests.configurationRead = () -> {
+		MockPricing.januaryAmount = "9.99";
+		MockPricing.pricingRead = () -> {
 			throw new AssertionError("Committed output must not be recalculated on restart");
 		};
 
@@ -258,7 +257,7 @@ class PricingPersistencePostgresTests {
 			assertEquals(committed, storedRecommendations(recommendations));
 			assertTrue(accounts.queryForObject(
 					"select processed from batch_outbox", Boolean.class));
-			assertEquals(1, PricingServiceTests.COMPLETED_BEFORE_EVALUATION.size());
+			assertEquals(1, MockPricing.COMPLETED_BEFORE_EVALUATION.size());
 			application.getBean(EngineService.class).processPendingAccounts();
 			assertEquals(committed, storedRecommendations(recommendations));
 		}
@@ -276,41 +275,36 @@ class PricingPersistencePostgresTests {
 		var committed = new AtomicReference<List<List<Map<String, Object>>>>();
 		doAnswer(invocation -> {
 			Connection connection = (Connection) invocation.callRealMethod();
-			return Proxy.newProxyInstance(Connection.class.getClassLoader(),
-					new Class<?>[] {Connection.class}, (proxy, method, arguments) -> {
-						boolean sourceCompletion = false;
-						if (store.equals("account") && method.getName().equals("commit")
-								&& loseAcknowledgement.get()) {
-							try (var statement = connection.createStatement();
-									var rows = statement.executeQuery("""
-											select exists(select 1 from batch_outbox where processed)
-											""")) {
-								rows.next();
-								sourceCompletion = rows.getBoolean(1);
-							}
-						}
-						if (method.getName().equals("commit") && !connection.isReadOnly()
-								&& (store.equals("recommendation") || sourceCompletion)
-								&& loseAcknowledgement.compareAndSet(true, false)) {
-							connection.commit();
-							if (store.equals("recommendation")) {
-								availableRecommendations.update(
-										"update recommendation_outbox set processed = true");
-							}
-							committed.set(storedRecommendations(availableRecommendations));
-							PricingServiceTests.januaryAmount = "9.99";
-							PricingServiceTests.configurationRead = () -> {
-								throw new AssertionError("A storage retry must not recalculate");
-							};
-							throw new SQLTransientConnectionException(
-									"Commit acknowledgement lost", "08006");
-						}
-						try {
-							return method.invoke(connection, arguments);
-						} catch (InvocationTargetException ex) {
-							throw ex.getCause();
-						}
-					});
+			return intercept(connection, Connection.class, (method, arguments, proceed) -> {
+				boolean sourceCompletion = false;
+				if (store.equals("account") && method.getName().equals("commit")
+						&& loseAcknowledgement.get()) {
+					try (var statement = connection.createStatement();
+							var rows = statement.executeQuery("""
+									select exists(select 1 from batch_outbox where processed)
+									""")) {
+						rows.next();
+						sourceCompletion = rows.getBoolean(1);
+					}
+				}
+				if (method.getName().equals("commit") && !connection.isReadOnly()
+						&& (store.equals("recommendation") || sourceCompletion)
+						&& loseAcknowledgement.compareAndSet(true, false)) {
+					connection.commit();
+					if (store.equals("recommendation")) {
+						availableRecommendations.update(
+								"update recommendation_outbox set processed = true");
+					}
+					committed.set(storedRecommendations(availableRecommendations));
+					MockPricing.januaryAmount = "9.99";
+					MockPricing.pricingRead = () -> {
+						throw new AssertionError("A storage retry must not recalculate");
+					};
+					throw new SQLTransientConnectionException(
+							"Commit acknowledgement lost", "08006");
+				}
+				return proceed.get();
+			});
 		}).when(storeDataSource).getConnection();
 		try {
 			service.processPendingAccounts();
@@ -396,7 +390,7 @@ class PricingPersistencePostgresTests {
 			recommendations.execute(
 					"alter table recommendation_outbox drop constraint reject_test_output");
 		}
-		PricingServiceTests.januaryAmount = "9.99";
+		MockPricing.januaryAmount = "9.99";
 		try (var application = startApplication()) {
 			assertAttempts(application.getBean(WakeUpReceiver.class).wakeUps(), 1);
 			assertTrue(accounts.queryForObject(
@@ -405,7 +399,7 @@ class PricingPersistencePostgresTests {
 					"select count(*) from recommendation_outbox", Integer.class));
 			assertEquals(new BigDecimal("9.99"), recommendations.queryForObject(
 					"select amount from fee_request_recommendations", BigDecimal.class));
-			assertEquals(2, PricingServiceTests.COMPLETED_BEFORE_EVALUATION.size());
+			assertEquals(2, MockPricing.COMPLETED_BEFORE_EVALUATION.size());
 		}
 	}
 
@@ -529,7 +523,7 @@ class PricingPersistencePostgresTests {
 		assertEquals(committed, storedRecommendations(recommendations));
 		WAKE_UPS.forEach(wakeUp -> assertEquals(committed, wakeUp.rows()));
 		assertTrue(accounts.queryForObject("select processed from batch_outbox", Boolean.class));
-		assertEquals(1, PricingServiceTests.COMPLETED_BEFORE_EVALUATION.size());
+		assertEquals(1, MockPricing.COMPLETED_BEFORE_EVALUATION.size());
 	}
 
 	ConfigurableApplicationContext startApplication(String... properties) {
@@ -556,7 +550,7 @@ class PricingPersistencePostgresTests {
 		arguments.addAll(List.of(properties));
 		try {
 			return new SpringApplicationBuilder(
-					EngineApplication.class, PricingServiceTests.Configuration.class)
+					EngineApplication.class, MockPricing.class)
 					.initializers(context -> {
 						context.getBeanFactory().registerSingleton(
 								WakeUpReceiver.class.getName(), receiver);

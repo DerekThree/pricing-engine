@@ -18,7 +18,7 @@ import java.util.stream.Collectors;
 
 import javax.sql.DataSource;
 
-import com.pricing.engine.ruleEngine.PriceConfig;
+import com.pricing.engine.ruleEngine.Pricing;
 import com.pricing.engine.ruleEngine.RuleEngine;
 import com.pricing.engine.ruleEngine.RuleEngineBatch;
 import com.pricing.engine.ruleEngine.RuleEngineBatchResult;
@@ -43,9 +43,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
 		"spring.jpa.properties.hibernate.generate_statistics=true",
 		"spring.jpa.properties.hibernate.session_factory.statement_inspector="
-				+ "com.pricing.engine.pricingStore.JpaPriceConfigRepositoryTests$RegionReadPause"
+				+ "com.pricing.engine.pricingStore.PricingRepositoryH2Tests$RegionReadPause"
 })
-class JpaPriceConfigRepositoryTests {
+class PricingRepositoryH2Tests {
 
 	@Autowired
 	private JdbcTemplate jdbcTemplate;
@@ -85,7 +85,7 @@ class JpaPriceConfigRepositoryTests {
 	}
 
 	@Test
-	void pricesFlatFeeFromPersistedConfiguration() {
+	void pricesFlatFeeFromPersistedPricing() {
 		UUID batchId = UUID.fromString("5fd2879b-7f17-4a05-8fbe-7ebce6958f3b");
 		Long productId = insertProduct();
 		Long branchId = insertBranch();
@@ -203,12 +203,12 @@ class JpaPriceConfigRepositoryTests {
 				LocalDate.of(2026, 10, 1),
 				LocalDate.of(2026, 10, 31));
 
-		PriceConfig config = configRepository.load(Set.of(
+		Pricing config = configRepository.load(Set.of(
 				LocalDate.of(2026, 8, 15),
 				LocalDate.of(2026, 10, 15)));
 
 		assertEquals(Set.of("PLAN0001", "PLAN0003"), config.plans().stream()
-				.map(PriceConfig.Plan::code)
+				.map(Pricing.Plan::code)
 				.collect(Collectors.toSet()));
 	}
 
@@ -266,7 +266,7 @@ class JpaPriceConfigRepositoryTests {
 	}
 
 	@Test
-	void additionalRegionMembershipsDoNotAddConfigurationQueries() {
+	void additionalRegionMembershipsDoNotAddPricingQueries() {
 		Long branchId = insertBranch();
 		insertRegion(branchId);
 		RuleEngineBatch batch = new RuleEngineBatch(
@@ -305,7 +305,7 @@ class JpaPriceConfigRepositoryTests {
 	}
 
 	@Test
-	void usesOneRepeatableReadSnapshotAcrossConfigurationPhases() throws Exception {
+	void usesOneRepeatableReadSnapshotAcrossPricingLoadPhases() throws Exception {
 		UUID batchId = UUID.fromString("5fd2879b-7f17-4a05-8fbe-7ebce6958f3b");
 		Long productId = insertProduct();
 		Long branchId = insertBranch();
@@ -336,7 +336,7 @@ class JpaPriceConfigRepositoryTests {
 				Future<RuleEngineBatchResult> resultFuture = executor.submit(
 						() -> ruleEngine.price(batch));
 				assertTrue(pause.reached.await(10, TimeUnit.SECONDS),
-						"Pricing Configuration load did not reach the Region phase");
+						"Pricing data load did not reach the Region phase");
 				try (PreparedStatement deleteMembership = writer.prepareStatement(
 						"delete from region_branches where region_id = ?")) {
 					deleteMembership.setLong(1, regionId);

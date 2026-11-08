@@ -11,7 +11,7 @@ import com.pricing.engine.pricingStore.EligibilityReasonEntity;
 import com.pricing.engine.pricingStore.PricingPlanEntity;
 import com.pricing.engine.pricingStore.PricingPlanFeeEntity;
 import com.pricing.engine.pricingStore.RegionEntity;
-import com.pricing.engine.ruleEngine.PriceConfig;
+import com.pricing.engine.ruleEngine.Pricing;
 import com.pricing.engine.ruleEngine.RuleEngineRepository;
 
 import jakarta.persistence.EntityManager;
@@ -24,9 +24,9 @@ import org.springframework.transaction.annotation.Transactional;
 public class PricingRepository implements RuleEngineRepository {
 
 	private final EntityManager entityManager;
-	private final PriceConfigMapper mapper;
+	private final PricingMapper mapper;
 
-	public PricingRepository(EntityManager entityManager, PriceConfigMapper mapper) {
+	public PricingRepository(EntityManager entityManager, PricingMapper mapper) {
 		this.entityManager = entityManager;
 		this.mapper = mapper;
 	}
@@ -38,7 +38,7 @@ public class PricingRepository implements RuleEngineRepository {
 
 	@Override
 	@Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
-	public PriceConfig load(Set<LocalDate> pricingDates) {
+	public Pricing load(Set<LocalDate> pricingDates) {
 		List<BranchEntity> branches = entityManager
 				.createQuery("select branch from BranchEntity branch", BranchEntity.class)
 				.getResultList();
@@ -47,7 +47,7 @@ public class PricingRepository implements RuleEngineRepository {
 				.getResultList();
 		loadRegionMemberships(regions);
 		if (pricingDates.isEmpty()) {
-			return mapper.toPriceConfig(branches, regions, List.of());
+			return mapper.toPricing(branches, regions, List.of());
 		}
 
 		List<LocalDate> submittedPricingDates = pricingDates.stream().toList();
@@ -69,7 +69,7 @@ public class PricingRepository implements RuleEngineRepository {
 						"pricingDate" + index, submittedPricingDates.get(index)));
 		List<PricingPlanEntity> pricingPlans = pricingPlanQuery.getResultList();
 		loadReasons(pricingPlans);
-		return mapper.toPriceConfig(branches, regions, pricingPlans);
+		return mapper.toPricing(branches, regions, pricingPlans);
 	}
 
 	private void loadRegionMemberships(List<RegionEntity> regions) {

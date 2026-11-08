@@ -45,7 +45,7 @@ public class RecommendationStoreConfiguration {
 			@Value("${recommendation-store.txn-processor.password:recommendationpass}")
 			String processorPassword) throws SQLException {
 		DataSourceProperties credentials = initialize ? initialization : runtime;
-		String database = initialize ? ConfigurationStoreConfiguration.initializeDatabase(
+		String database = initialize ? PricingStoreConfiguration.initializeDatabase(
 				runtime, initialization, processorUser, processorPassword) : null;
 		var migrations = Flyway.configure().dataSource(runtime.getUrl(), credentials.getUsername(),
 				credentials.getPassword())

@@ -6,12 +6,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-public record PriceConfig(
+public record Pricing(
 		Map<String, Branch> branches,
 		List<Region> regions,
 		List<Plan> plans) {
 
-	public PriceConfig {
+	public Pricing {
 		branches = Map.copyOf(branches);
 		regions = List.copyOf(regions);
 		plans = List.copyOf(plans);

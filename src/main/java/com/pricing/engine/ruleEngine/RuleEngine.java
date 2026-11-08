@@ -8,14 +8,14 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import com.pricing.engine.ruleEngine.PriceConfig.AttributeDefinition;
-import com.pricing.engine.ruleEngine.PriceConfig.Branch;
-import com.pricing.engine.ruleEngine.PriceConfig.EligibilityCondition;
-import com.pricing.engine.ruleEngine.PriceConfig.EligibilityReason;
-import com.pricing.engine.ruleEngine.PriceConfig.FeeType;
-import com.pricing.engine.ruleEngine.PriceConfig.Plan;
-import com.pricing.engine.ruleEngine.PriceConfig.PlanFee;
-import com.pricing.engine.ruleEngine.PriceConfig.Region;
+import com.pricing.engine.ruleEngine.Pricing.AttributeDefinition;
+import com.pricing.engine.ruleEngine.Pricing.Branch;
+import com.pricing.engine.ruleEngine.Pricing.EligibilityCondition;
+import com.pricing.engine.ruleEngine.Pricing.EligibilityReason;
+import com.pricing.engine.ruleEngine.Pricing.FeeType;
+import com.pricing.engine.ruleEngine.Pricing.Plan;
+import com.pricing.engine.ruleEngine.Pricing.PlanFee;
+import com.pricing.engine.ruleEngine.Pricing.Region;
 import com.pricing.engine.ruleEngine.RuleEngineBatch.*;
 import com.pricing.engine.ruleEngine.RuleEngineBatchResult.*;
 
@@ -24,44 +24,44 @@ import org.springframework.stereotype.Component;
 @Component
 public class RuleEngine {
 
-	private final RuleEngineRepository configRepository;
+	private final RuleEngineRepository pricingRepository;
 
-	public RuleEngine(RuleEngineRepository configRepository) {
-		this.configRepository = configRepository;
+	public RuleEngine(RuleEngineRepository pricingRepository) {
+		this.pricingRepository = pricingRepository;
 	}
 
 	public RuleEngineBatchResult price(RuleEngineBatch batch) {
 		Set<LocalDate> pricingDates = batch.accounts().stream()
 				.map(Account::pricingDate)
 				.collect(Collectors.toUnmodifiableSet());
-		PriceConfig config;
+		Pricing pricing;
 		try {
-			config = configRepository.load(pricingDates);
+			pricing = pricingRepository.load(pricingDates);
 		} catch (RuntimeException exception) {
 			throw new PricingAccessException(exception);
 		}
 		return new RuleEngineBatchResult(batch.batchId(), batch.accounts().stream()
-				.map(account -> price(account, config))
+				.map(account -> price(account, pricing))
 				.toList());
 	}
 
-	private AccountResult price(Account account, PriceConfig config) {
+	private AccountResult price(Account account, Pricing pricing) {
 		try {
-			Branch branch = config.branches().get(account.branchCode());
+			Branch branch = pricing.branches().get(account.branchCode());
 			if (branch == null) {
 				return failed(account, AccountStatus.BRANCH_NOT_FOUND);
 			}
 
-			List<Region> regionMatches = config.regions().stream()
+			List<Region> regionMatches = pricing.regions().stream()
 					.filter(candidate -> candidate.branchCodes().contains(branch.code()))
 					.toList();
 			if (regionMatches.isEmpty()) {
-				regionMatches = config.regions().stream()
+				regionMatches = pricing.regions().stream()
 						.filter(candidate -> candidate.zipCodes().contains(branch.zipCode()))
 						.toList();
 			}
 			if (regionMatches.isEmpty()) {
-				regionMatches = config.regions().stream()
+				regionMatches = pricing.regions().stream()
 						.filter(candidate -> candidate.states().contains(branch.state()))
 						.toList();
 			}
@@ -72,7 +72,7 @@ public class RuleEngine {
 				return failed(account, AccountStatus.ERROR);
 			}
 			Region region = regionMatches.getFirst();
-			List<Plan> planMatches = config.plans().stream()
+			List<Plan> planMatches = pricing.plans().stream()
 					.filter(candidate -> candidate.productCode().equals(account.productCode()))
 					.filter(candidate -> candidate.regionCode().equals(region.code()))
 					.filter(candidate -> !account.pricingDate().isBefore(candidate.activeFrom()))
@@ -276,9 +276,9 @@ public class RuleEngine {
 		};
 	}
 
-	private <T> T requireOne(List<T> matches, String configurationType) {
+	private <T> T requireOne(List<T> matches, String pricingType) {
 		if (matches.size() != 1) {
-			throw new IllegalStateException(configurationType + " is outside the flat-Fee tracer");
+			throw new IllegalStateException(pricingType + " is outside the flat-Fee tracer");
 		}
 
 		return matches.getFirst();
