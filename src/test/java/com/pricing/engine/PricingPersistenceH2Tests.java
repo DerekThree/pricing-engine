@@ -55,6 +55,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.boot.convert.DurationStyle;
 import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.context.event.ContextClosedEvent;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.support.PropertiesLoaderUtils;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -127,7 +128,7 @@ class PricingPersistenceH2Tests {
 	static String url(String database) {
 		return "jdbc:h2:mem:pricing_recovery_" + database
 				+ ";MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;NON_KEYWORDS=VALUE"
-				+ ";DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE";
+				+ ";DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE;LOCK_TIMEOUT=10000";
 	}
 
 	@Autowired
@@ -1123,7 +1124,7 @@ class PricingPersistenceH2Tests {
 				try (var started = application.get(10, TimeUnit.SECONDS)) {
 					await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertTrue(
 							accounts.queryForObject("select processed from batch_outbox", Boolean.class)));
-					assertAttempts(1);
+					assertAttempts(started.getBean(WakeUpReceiver.class).wakeUps(), 1);
 				}
 			}
 		}
@@ -1143,7 +1144,8 @@ class PricingPersistenceH2Tests {
 		try (var application = startApplication("--transaction-processor.http-timeout=5s",
 				"--recommendation-store.datasource.url=" + recommendationUrl,
 				"--account-store.datasource.url=" + url(UUID.randomUUID().toString()))) {
-			await().atMost(Duration.ofSeconds(5)).until(() -> ACTIVE_REQUESTS.get() > 0);
+			var wakeUps = application.getBean(WakeUpReceiver.class).wakeUps();
+			await().atMost(Duration.ofSeconds(5)).until(() -> !wakeUps.isEmpty());
 			String port = application.getEnvironment().getProperty("local.server.port");
 			assertEquals(200, RestClient.create().get()
 					.uri("http://127.0.0.1:" + port + "/openapi.yaml")
@@ -1151,7 +1153,7 @@ class PricingPersistenceH2Tests {
 			assertFalse(pendingRecommendations.queryForObject(
 					"select processed from recommendation_outbox", Boolean.class));
 			responseGate.countDown();
-			assertAttempts(3);
+			assertAttempts(wakeUps, 3);
 		} finally {
 			responseGate.countDown();
 		}
@@ -1554,15 +1556,16 @@ class PricingPersistenceH2Tests {
 		};
 
 		try (var application = startApplication()) {
-			assertAttempts(4);
-			assertCompletedBatchUnchanged(committed);
+			var wakeUps = application.getBean(WakeUpReceiver.class).wakeUps();
+			assertAttempts(wakeUps, 1);
+			assertCompletedBatchUnchanged(committed, wakeUps);
 		}
 	}
 
 	@Test
 	void startupDoesNotNotifyAnEmptyStore() {
 		try (var application = startApplication()) {
-			assertAttempts(0);
+			assertAttempts(application.getBean(WakeUpReceiver.class).wakeUps(), 0);
 		}
 	}
 
@@ -1575,7 +1578,7 @@ class PricingPersistenceH2Tests {
 		var committed = storedRecommendations(recommendations);
 
 		try (var application = startApplication()) {
-			assertAttempts(1);
+			assertAttempts(application.getBean(WakeUpReceiver.class).wakeUps(), 0);
 			assertEquals(committed, storedRecommendations(recommendations));
 			assertEquals(1, PricingServiceTests.COMPLETED_BEFORE_EVALUATION.size());
 		}
@@ -1587,12 +1590,14 @@ class PricingPersistenceH2Tests {
 		service.processPendingAccounts();
 		assertAttempts(1);
 		addAccount(UUID.randomUUID());
+		List<WakeUp> wakeUps = new CopyOnWriteArrayList<>();
+		var receiver = new WakeUpReceiver(startTransactionProcessor(wakeUps), wakeUps);
 		PricingServiceTests.configurationRead = () -> await().atMost(Duration.ofSeconds(5))
-				.until(() -> WAKE_UPS.size() >= 2);
+				.until(() -> !wakeUps.isEmpty());
 
-		try (var application = startApplication()) {
-			assertAttempts(3);
-			assertEquals(1, WAKE_UPS.get(1).rows().getFirst().size());
+		try (var application = startApplication(receiver)) {
+			assertAttempts(wakeUps, 2);
+			assertEquals(1, wakeUps.getFirst().rows().getFirst().size());
 			assertEquals(2, recommendations.queryForObject(
 					"select count(*) from recommendation_outbox", Integer.class));
 			assertEquals(2, accounts.queryForObject(
@@ -1611,11 +1616,12 @@ class PricingPersistenceH2Tests {
 		try (var application = startApplication("--transaction-processor.max-attempts=2",
 				"--transaction-processor.retry-delay=150ms",
 				"--transaction-processor.http-timeout=100ms")) {
-			assertAttempts(3);
-			long interval = WAKE_UPS.get(2).receivedAt() - WAKE_UPS.get(1).receivedAt();
+			var wakeUps = application.getBean(WakeUpReceiver.class).wakeUps();
+			assertAttempts(wakeUps, 2);
+			long interval = wakeUps.get(1).receivedAt() - wakeUps.getFirst().receivedAt();
 			assertTrue(interval >= Duration.ofMillis(150).toNanos());
 			assertTrue(interval < Duration.ofMillis(750).toNanos());
-			assertCompletedBatchUnchanged(committed);
+			assertCompletedBatchUnchanged(committed, wakeUps);
 		}
 	}
 
@@ -1630,10 +1636,12 @@ class PricingPersistenceH2Tests {
 		};
 
 		try (var application = startApplication()) {
-			assertAttempts(2);
+			var wakeUps = application.getBean(WakeUpReceiver.class).wakeUps();
+			assertAttempts(wakeUps, 1);
+			assertEquals(1, WAKE_UPS.size());
 			assertEquals(committed, storedRecommendations(recommendations));
 			assertEquals(1, PricingServiceTests.COMPLETED_BEFORE_EVALUATION.size());
-			WAKE_UPS.forEach(wakeUp -> assertEquals(committed, wakeUp.rows()));
+			wakeUps.forEach(wakeUp -> assertEquals(committed, wakeUp.rows()));
 		}
 	}
 
@@ -1812,13 +1820,24 @@ class PricingPersistenceH2Tests {
 	}
 
 	void assertCompletedBatchUnchanged(List<List<Map<String, Object>>> committed) {
+		assertCompletedBatchUnchanged(committed, WAKE_UPS);
+	}
+
+	void assertCompletedBatchUnchanged(List<List<Map<String, Object>>> committed,
+			List<WakeUp> wakeUps) {
 		assertEquals(committed, storedRecommendations(recommendations));
-		WAKE_UPS.forEach(wakeUp -> assertEquals(committed, wakeUp.rows()));
+		wakeUps.forEach(wakeUp -> assertEquals(committed, wakeUp.rows()));
 		assertTrue(accounts.queryForObject("select processed from batch_outbox", Boolean.class));
 		assertEquals(1, PricingServiceTests.COMPLETED_BEFORE_EVALUATION.size());
 	}
 
 	ConfigurableApplicationContext startApplication(String... properties) {
+		List<WakeUp> wakeUps = new CopyOnWriteArrayList<>();
+		return startApplication(
+				new WakeUpReceiver(startTransactionProcessor(wakeUps), wakeUps), properties);
+	}
+
+	ConfigurableApplicationContext startApplication(WakeUpReceiver receiver, String... properties) {
 		List<String> arguments = new ArrayList<>(List.of(
 				"--spring.datasource.url=" + url("pricingconfig"),
 				"--spring.datasource.username=sa",
@@ -1834,7 +1853,7 @@ class PricingPersistenceH2Tests {
 				"--recommendation-store.datasource.password=",
 				"--recommendation-store.datasource.driver-class-name=org.h2.Driver",
 				"--transaction-processor.wake-up-url=http://localhost:"
-						+ TRANSACTION_PROCESSOR.getAddress().getPort() + "/api/v1/mock/txn/wake",
+						+ receiver.server().getAddress().getPort() + "/api/v1/mock/txn/wake",
 				"--TRANSACTION_PROCESSOR_RETRY_DELAY=50ms",
 				"--TRANSACTION_PROCESSOR_HTTP_TIMEOUT=100ms"));
 		for (String property : properties) {
@@ -1842,28 +1861,51 @@ class PricingPersistenceH2Tests {
 			arguments.removeIf(argument -> argument.startsWith(name));
 			arguments.add(property);
 		}
-		return new SpringApplicationBuilder(
-				EngineApplication.class, PricingServiceTests.Configuration.class)
-				.properties("server.port=0", "engine.max-workers=1")
-				.run(arguments.toArray(String[]::new));
+		try {
+			return new SpringApplicationBuilder(
+					EngineApplication.class, PricingServiceTests.Configuration.class)
+					.initializers(context -> {
+						context.getBeanFactory().registerSingleton(
+								WakeUpReceiver.class.getName(), receiver);
+						context.addApplicationListener(event -> {
+							if (event instanceof ContextClosedEvent closed
+									&& closed.getApplicationContext() == context) {
+								receiver.server().stop(0);
+							}
+						});
+					})
+					.properties("server.port=0", "engine.max-workers=1")
+					.run(arguments.toArray(String[]::new));
+		} catch (RuntimeException | Error ex) {
+			receiver.server().stop(0);
+			throw ex;
+		}
 	}
 
 	void assertAttempts(int count) {
+		assertAttempts(WAKE_UPS, count);
+	}
+
+	void assertAttempts(List<WakeUp> wakeUps, int count) {
 		await().atMost(Duration.ofSeconds(5))
-				.untilAsserted(() -> assertEquals(count, WAKE_UPS.size()));
+				.untilAsserted(() -> assertEquals(count, wakeUps.size()));
 		await().during(Duration.ofMillis(500)).atMost(Duration.ofSeconds(2))
-				.untilAsserted(() -> assertEquals(count, WAKE_UPS.size()));
+				.untilAsserted(() -> assertEquals(count, wakeUps.size()));
 	}
 
 	static HttpServer startTransactionProcessor() {
+		return startTransactionProcessor(WAKE_UPS);
+	}
+
+	static HttpServer startTransactionProcessor(List<WakeUp> wakeUps) {
 		try {
 			HttpServer server = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
 			server.setExecutor(HTTP_EXECUTOR);
 			server.createContext("/api/v1/mock/txn/wake", exchange -> {
 				ACTIVE_REQUESTS.incrementAndGet();
 				try (exchange) {
-					int attempt = WAKE_UPS.size();
-					WAKE_UPS.add(new WakeUp(exchange.getRequestMethod(),
+					int attempt = wakeUps.size();
+					wakeUps.add(new WakeUp(exchange.getRequestMethod(),
 							exchange.getRequestURI().getPath(), exchange.getRequestURI().getQuery(),
 							new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8),
 							storedRecommendations(recommendationStore), System.nanoTime()));
@@ -1892,6 +1934,9 @@ class PricingPersistenceH2Tests {
 				database.queryForList("select * from fee_request_recommendations order by 1"),
 				database.queryForList("select * from recommendation_eligibility_reasons order by 1, 2"),
 				database.queryForList("select * from recommendation_outbox order by 1"));
+	}
+
+	private record WakeUpReceiver(HttpServer server, List<WakeUp> wakeUps) {
 	}
 
 	private record WakeUp(String method, String path, String query, String body,

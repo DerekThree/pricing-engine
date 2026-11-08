@@ -119,6 +119,9 @@ class PricingServiceTests {
 		addAccount(batchId, "FEB", LocalDate.of(2026, 2, 15));
 
 		service.afterSingletonsInstantiated();
+		await().atMost(Duration.ofSeconds(5))
+				.until(() -> WAKE_UPS.get() >= 1 && accounts.queryForObject(
+						"select processed from batch_outbox where batch_id = ?", Boolean.class, batchId));
 		service.afterSingletonsInstantiated();
 		await().atMost(Duration.ofSeconds(5))
 				.until(() -> WAKE_UPS.get() >= 2);

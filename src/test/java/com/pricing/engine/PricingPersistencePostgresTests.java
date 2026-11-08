@@ -52,6 +52,7 @@ import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
+import org.springframework.context.event.ContextClosedEvent;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
@@ -252,7 +253,8 @@ class PricingPersistencePostgresTests {
 		};
 
 		try (var application = startApplication()) {
-			assertAttempts(processed ? 1 : 2);
+			assertAttempts(application.getBean(WakeUpReceiver.class).wakeUps(), processed ? 0 : 1);
+			assertAttempts(1);
 			assertEquals(committed, storedRecommendations(recommendations));
 			assertTrue(accounts.queryForObject(
 					"select processed from batch_outbox", Boolean.class));
@@ -396,7 +398,7 @@ class PricingPersistencePostgresTests {
 		}
 		PricingServiceTests.januaryAmount = "9.99";
 		try (var application = startApplication()) {
-			assertAttempts(1);
+			assertAttempts(application.getBean(WakeUpReceiver.class).wakeUps(), 1);
 			assertTrue(accounts.queryForObject(
 					"select processed from batch_outbox", Boolean.class));
 			assertEquals(1, recommendations.queryForObject(
@@ -531,6 +533,8 @@ class PricingPersistencePostgresTests {
 	}
 
 	ConfigurableApplicationContext startApplication(String... properties) {
+		List<WakeUp> wakeUps = new CopyOnWriteArrayList<>();
+		var receiver = new WakeUpReceiver(startTransactionProcessor(wakeUps), wakeUps);
 		List<String> arguments = new ArrayList<>(List.of(
 				"--spring.datasource.url=" + POSTGRES.getJdbcUrl(),
 				"--spring.datasource.username=" + POSTGRES.getUsername(),
@@ -546,32 +550,55 @@ class PricingPersistencePostgresTests {
 				"--recommendation-store.datasource.password=" + POSTGRES.getPassword(),
 				"--recommendation-store.datasource.driver-class-name=org.postgresql.Driver",
 				"--transaction-processor.wake-up-url=http://localhost:"
-						+ TRANSACTION_PROCESSOR.getAddress().getPort() + "/api/v1/mock/txn/wake",
+						+ receiver.server().getAddress().getPort() + "/api/v1/mock/txn/wake",
 				"--TRANSACTION_PROCESSOR_RETRY_DELAY=50ms",
 				"--TRANSACTION_PROCESSOR_HTTP_TIMEOUT=100ms"));
 		arguments.addAll(List.of(properties));
-		return new SpringApplicationBuilder(
-				EngineApplication.class, PricingServiceTests.Configuration.class)
-				.properties("server.port=0", "engine.max-workers=1")
-				.run(arguments.toArray(String[]::new));
+		try {
+			return new SpringApplicationBuilder(
+					EngineApplication.class, PricingServiceTests.Configuration.class)
+					.initializers(context -> {
+						context.getBeanFactory().registerSingleton(
+								WakeUpReceiver.class.getName(), receiver);
+						context.addApplicationListener(event -> {
+							if (event instanceof ContextClosedEvent closed
+									&& closed.getApplicationContext() == context) {
+								receiver.server().stop(0);
+							}
+						});
+					})
+					.properties("server.port=0", "engine.max-workers=1")
+					.run(arguments.toArray(String[]::new));
+		} catch (RuntimeException | Error ex) {
+			receiver.server().stop(0);
+			throw ex;
+		}
 	}
 
 	void assertAttempts(int count) {
+		assertAttempts(WAKE_UPS, count);
+	}
+
+	void assertAttempts(List<WakeUp> wakeUps, int count) {
 		await().atMost(Duration.ofSeconds(5))
-				.untilAsserted(() -> assertEquals(count, WAKE_UPS.size()));
+				.untilAsserted(() -> assertEquals(count, wakeUps.size()));
 		await().during(Duration.ofMillis(500)).atMost(Duration.ofSeconds(2))
-				.untilAsserted(() -> assertEquals(count, WAKE_UPS.size()));
+				.untilAsserted(() -> assertEquals(count, wakeUps.size()));
 	}
 
 	static HttpServer startTransactionProcessor() {
+		return startTransactionProcessor(WAKE_UPS);
+	}
+
+	static HttpServer startTransactionProcessor(List<WakeUp> wakeUps) {
 		try {
 			HttpServer server = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
 			server.setExecutor(HTTP_EXECUTOR);
 			server.createContext("/api/v1/mock/txn/wake", exchange -> {
 				ACTIVE_REQUESTS.incrementAndGet();
 				try (exchange) {
-					int attempt = WAKE_UPS.size();
-					WAKE_UPS.add(new WakeUp(exchange.getRequestMethod(),
+					int attempt = wakeUps.size();
+					wakeUps.add(new WakeUp(exchange.getRequestMethod(),
 							exchange.getRequestURI().getPath(), exchange.getRequestURI().getQuery(),
 							new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8),
 							storedRecommendations(recommendationStore), System.nanoTime()));
@@ -600,6 +627,9 @@ class PricingPersistencePostgresTests {
 				database.queryForList("select * from fee_request_recommendations order by 1"),
 				database.queryForList("select * from recommendation_eligibility_reasons order by 1, 2"),
 				database.queryForList("select * from recommendation_outbox order by 1"));
+	}
+
+	private record WakeUpReceiver(HttpServer server, List<WakeUp> wakeUps) {
 	}
 
 	private record WakeUp(String method, String path, String query, String body,

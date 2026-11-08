@@ -124,6 +124,27 @@ class RecommendationStorePostgresTests {
 			assertThat(processor.update("update recommendation_outbox set processed = true"))
 					.isEqualTo(1);
 			assertThat(repository.existsByProcessedFalse()).isFalse();
+			for (DataSource privileged : List.of(
+					new DriverManagerDataSource(databaseUrl("recommendationdb"),
+							"store_initializer", "initialization-password"),
+					new DriverManagerDataSource(databaseUrl("recommendationdb"),
+							POSTGRES.getUsername(), POSTGRES.getPassword()))) {
+				for (String table : TABLES) {
+					assertDenied(privileged, "delete from " + table);
+					assertDenied(privileged, "truncate " + table + " cascade");
+					if (!table.equals("recommendation_outbox")) {
+						String column = table.equals("recommendation_eligibility_reasons")
+								? "reason_code" : "id";
+						assertDenied(privileged, "update " + table + " set " + column + " = " + column);
+					}
+				}
+				assertDenied(privileged, "update recommendation_outbox set batch_id = '"
+						+ UUID.randomUUID() + "'");
+			}
+			assertDenied(processorDataSource, "update recommendation_outbox set batch_id = '"
+					+ UUID.randomUUID() + "'");
+			assertThat(processor.update("update recommendation_outbox set batch_id = batch_id"))
+					.isEqualTo(1);
 			for (DataSource runtime : List.of(engineDataSource, processorDataSource)) {
 				for (String sql : List.of("create table forbidden (id integer)",
 						"create schema forbidden", "create database forbidden", "create role forbidden",
@@ -140,7 +161,7 @@ class RecommendationStorePostgresTests {
 				databaseUrl("recommendationdb"), "store_initializer", "initialization-password"));
 		var history = initialization.queryForList(
 				"select * from flyway_schema_history order by installed_rank");
-		assertThat(history).hasSize(3);
+		assertThat(history).hasSize(4);
 		assertThat(initialization.queryForList("select distinct tableowner from pg_tables "
 				+ "where schemaname = 'public'", String.class)).containsExactly("store_initializer");
 		initialization.execute("alter table recommendation_outbox add column processing_note text");
