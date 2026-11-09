@@ -21,22 +21,6 @@ jobs:
         with:
           path: pricing-engine
 
-      - name: Check out backend migrations
-        uses: actions/checkout@v5
-        with:
-          repository: DerekThree/pricing-backend
-          ref: main
-          path: pricing-backend
-          sparse-checkout: src/main/resources/db/migration
-
-      - name: Check out account processor migrations
-        uses: actions/checkout@v5
-        with:
-          repository: DerekThree/pricing-mock-server
-          ref: main
-          path: pricing-mock-server
-          sparse-checkout: src/main/resources/db/migration
-
       - name: Install Java 21
         uses: actions/setup-java@v5
         with:

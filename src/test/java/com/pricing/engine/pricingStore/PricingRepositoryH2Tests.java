@@ -85,8 +85,7 @@ class PricingRepositoryH2Tests {
 	}
 
 	@Test
-	void pricesFlatFeeFromPersistedPricing() {
-		UUID batchId = UUID.fromString("5fd2879b-7f17-4a05-8fbe-7ebce6958f3b");
+	void loadsFlatFeeAndPlanDetailsFromPersistedPricing() {
 		Long productId = insertProduct();
 		Long branchId = insertBranch();
 		Long regionId = insertRegion(branchId);
@@ -99,31 +98,30 @@ class PricingRepositoryH2Tests {
 				LocalDate.of(2026, 8, 31));
 		jdbcTemplate.update("insert into pricing_plan_fees values (?, ?, ?)",
 				pricingPlanId, feeId, new BigDecimal("7.5000"));
-		RuleEngineBatch batch = new RuleEngineBatch(batchId, List.of(new Account(
-				"ACCOUNT001",
-				"PROD0001",
-				"BRANCH001",
-				LocalDate.of(2026, 8, 31),
-				List.of(),
-				List.of(new FeeRequest(1L, "FEE00001", null)))));
 
-		RuleEngineBatchResult result = ruleEngine.price(batch);
+		Pricing pricing = configRepository.load(Set.of(LocalDate.of(2026, 8, 31)));
 
-		assertEquals(new RuleEngineBatchResult(batchId, List.of(new AccountResult(
-				"ACCOUNT001",
-				AccountStatus.OK,
-				"PLAN0001",
-				List.of(new FeeResult(
-						1L,
-						FeeStatus.OK,
-						Decision.CHARGED,
-						new BigDecimal("7.50"),
-						null))))), result);
+		assertEquals(Map.of("BRANCH001", new Pricing.Branch("BRANCH001", "IL", "60459")),
+				pricing.branches());
+		assertEquals(List.of(new Pricing.Region("REGION001", Set.of("BRANCH001"), Set.of(), Set.of())),
+				pricing.regions());
+		assertEquals(1, pricing.plans().size());
+		Pricing.Plan plan = pricing.plans().getFirst();
+		assertEquals("PLAN0001", plan.code());
+		assertEquals("PROD0001", plan.productCode());
+		assertEquals("REGION001", plan.regionCode());
+		assertEquals(LocalDate.of(2026, 8, 1), plan.activeFrom());
+		assertEquals(LocalDate.of(2026, 8, 31), plan.activeThrough());
+		assertEquals(1, plan.fees().size());
+		Pricing.PlanFee fee = plan.fees().getFirst();
+		assertEquals("FEE00001", fee.code());
+		assertEquals(Pricing.FeeType.FLAT, fee.type());
+		assertEquals(0, fee.amount().compareTo(new BigDecimal("7.5000")));
+		assertEquals(List.of(), fee.reasons());
 	}
 
 	@Test
-	void pricesChargedAndWaivedFeesFromPersistedEligibilityConditions() {
-		UUID batchId = UUID.fromString("5fd2879b-7f17-4a05-8fbe-7ebce6958f3b");
+	void loadsFeeEligibilityConditionsAndAssociations() {
 		Long productId = insertProduct();
 		Long branchId = insertBranch();
 		Long regionId = insertRegion(branchId);
@@ -148,35 +146,26 @@ class PricingRepositoryH2Tests {
 				pricingPlanId, waivedFeeId, waivedReasonId);
 		jdbcTemplate.update("insert into pricing_plan_fee_reasons values (?, ?, ?)",
 				pricingPlanId, chargedFeeId, chargedReasonId);
-		RuleEngineBatch batch = new RuleEngineBatch(batchId, List.of(new Account(
-				"ACCOUNT001",
-				"PROD0001",
-				"BRANCH001",
-				LocalDate.of(2026, 8, 31),
-				List.of(new RuleEngineBatch.AccountAttribute("ATTR0001", " premier ")),
-				List.of(
-						new FeeRequest(1L, "FEE00001", null),
-						new FeeRequest(2L, "FEE00002", null)))));
 
-		RuleEngineBatchResult result = ruleEngine.price(batch);
+		Pricing pricing = configRepository.load(Set.of(LocalDate.of(2026, 8, 31)));
 
-		assertEquals(new RuleEngineBatchResult(batchId, List.of(new AccountResult(
-				"ACCOUNT001",
-				AccountStatus.OK,
-				"PLAN0001",
-				List.of(
-						new FeeResult(
-								1L,
-								FeeStatus.OK,
-								Decision.WAIVED,
-								null,
-								List.of("ELIG0001")),
-						new FeeResult(
-								2L,
-								FeeStatus.OK,
-								Decision.CHARGED,
-								new BigDecimal("8.50"),
-								null))))), result);
+		assertEquals(1, pricing.plans().size());
+		assertEquals("PLAN0001", pricing.plans().getFirst().code());
+		Map<String, Pricing.PlanFee> fees = pricing.plans().getFirst().fees().stream()
+				.collect(Collectors.toMap(Pricing.PlanFee::code, fee -> fee));
+		assertEquals(Set.of("FEE00001", "FEE00002"), fees.keySet());
+		assertEquals(Pricing.FeeType.FLAT, fees.get("FEE00001").type());
+		assertEquals(Pricing.FeeType.FLAT, fees.get("FEE00002").type());
+		assertEquals(0, fees.get("FEE00001").amount().compareTo(new BigDecimal("7.5000")));
+		assertEquals(0, fees.get("FEE00002").amount().compareTo(new BigDecimal("8.5000")));
+		assertEquals(List.of(new Pricing.EligibilityReason("ELIG0001",
+				List.of(new Pricing.EligibilityCondition(
+						new Pricing.AttributeDefinition("ATTR0001", Pricing.AttributeType.TEXT),
+						"=", "PREMIER")))), fees.get("FEE00001").reasons());
+		assertEquals(List.of(new Pricing.EligibilityReason("ELIG0002",
+				List.of(new Pricing.EligibilityCondition(
+						new Pricing.AttributeDefinition("ATTR0001", Pricing.AttributeType.TEXT),
+						"=", "STANDARD")))), fees.get("FEE00002").reasons());
 	}
 
 	@Test
@@ -213,7 +202,7 @@ class PricingRepositoryH2Tests {
 	}
 
 	@Test
-	void resolvesZipCodeRegionAndReturnsPlanNotFoundForAnotherPricingDate() {
+	void loadsZipCodeRegionAndFiltersPlansByPricingDate() {
 		Long productId = insertProduct();
 		insertBranch();
 		Long regionId = insertRegionByZipCode();
@@ -226,43 +215,25 @@ class PricingRepositoryH2Tests {
 				LocalDate.of(2026, 8, 31));
 		jdbcTemplate.update("insert into pricing_plan_fees values (?, ?, ?)",
 				pricingPlanId, feeId, new BigDecimal("7.5000"));
-		RuleEngineBatch batch = new RuleEngineBatch(
-				UUID.fromString("5fd2879b-7f17-4a05-8fbe-7ebce6958f3b"),
-				List.of(
-						new Account(
-								"ACCOUNT001",
-								"PROD0001",
-								"BRANCH001",
-								LocalDate.of(2026, 8, 31),
-								List.of(),
-								List.of(new FeeRequest(1L, "FEE00001", null))),
-						new Account(
-								"ACCOUNT002",
-								"PROD0001",
-								"BRANCH001",
-								LocalDate.of(2026, 9, 1),
-								List.of(),
-								List.of(new FeeRequest(2L, "FEE00001", null)))));
 
-		RuleEngineBatchResult result = ruleEngine.price(batch);
+		Pricing pricing = configRepository.load(Set.of(
+				LocalDate.of(2026, 8, 31), LocalDate.of(2026, 9, 1)));
 
-		Map<String, AccountResult> accounts = result.accounts().stream()
-				.collect(Collectors.toMap(AccountResult::accountNumber, account -> account));
-		assertEquals(new AccountResult(
-				"ACCOUNT001",
-				AccountStatus.OK,
-				"PLAN0001",
-				List.of(new FeeResult(
-						1L,
-						FeeStatus.OK,
-						Decision.CHARGED,
-						new BigDecimal("7.50"),
-						null))), accounts.get("ACCOUNT001"));
-		assertEquals(new AccountResult(
-				"ACCOUNT002",
-				AccountStatus.PLAN_NOT_FOUND,
-				null,
-				null), accounts.get("ACCOUNT002"));
+		assertEquals(Map.of("BRANCH001", new Pricing.Branch("BRANCH001", "IL", "60459")),
+				pricing.branches());
+		assertEquals(List.of(new Pricing.Region("REGION001", Set.of(), Set.of("60459"), Set.of())),
+				pricing.regions());
+		assertEquals(1, pricing.plans().size());
+		Pricing.Plan plan = pricing.plans().getFirst();
+		assertEquals("PLAN0001", plan.code());
+		assertEquals("PROD0001", plan.productCode());
+		assertEquals("REGION001", plan.regionCode());
+		assertEquals(LocalDate.of(2026, 8, 1), plan.activeFrom());
+		assertEquals(LocalDate.of(2026, 8, 31), plan.activeThrough());
+		assertEquals(1, plan.fees().size());
+		assertEquals("FEE00001", plan.fees().getFirst().code());
+		assertEquals(0, plan.fees().getFirst().amount().compareTo(new BigDecimal("7.5000")));
+		assertTrue(configRepository.load(Set.of(LocalDate.of(2026, 9, 1))).plans().isEmpty());
 	}
 
 	@Test

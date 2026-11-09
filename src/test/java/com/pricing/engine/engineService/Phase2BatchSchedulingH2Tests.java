@@ -1,8 +1,8 @@
 package com.pricing.engine.engineService;
 
 import com.pricing.engine.EngineService;
-import com.pricing.engine.H2TestSupport;
-import com.pricing.engine.MockPricing;
+import com.pricing.engine.utils.H2Fixture;
+import com.pricing.engine.utils.MockPricing;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -31,7 +31,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.web.client.RestClient;
-import static com.pricing.engine.JdbcTestSupport.intercept;
+import static com.pricing.engine.utils.JdbcUtils.intercept;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -45,7 +45,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import java.time.LocalDate;
 import static org.mockito.Mockito.when;
 
-class Phase2BatchSchedulingH2Tests extends H2TestSupport {
+class Phase2BatchSchedulingH2Tests extends H2Fixture {
 
 	@Test
 	void defaultCapRefillsSlotsAndCoordinatesOverlappingWakeUps() throws Exception {

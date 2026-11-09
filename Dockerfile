@@ -1,8 +1,6 @@
 FROM eclipse-temurin:21-jdk-jammy AS build-env
 WORKDIR /app/pricing-engine
 COPY pricing-engine/ .
-COPY pricing-backend/src/main/resources/db/migration/ \
-    /app/pricing-backend/src/main/resources/db/migration/
 RUN ./mvnw clean package
 
 FROM eclipse-temurin:21-jre-jammy

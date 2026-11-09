@@ -1,4 +1,4 @@
-package com.pricing.engine;
+package com.pricing.engine.utils;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -6,7 +6,7 @@ import java.lang.reflect.Proxy;
 
 import org.junit.jupiter.api.function.ThrowingSupplier;
 
-public final class JdbcTestSupport {
+public final class JdbcUtils {
 
 	@FunctionalInterface
 	public interface Interceptor {

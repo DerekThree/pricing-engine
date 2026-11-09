@@ -1,4 +1,4 @@
-package com.pricing.engine;
+package com.pricing.engine.utils;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -18,6 +18,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import javax.sql.DataSource;
 import com.sun.net.httpserver.HttpServer;
+import com.pricing.engine.EngineApplication;
+import com.pricing.engine.EngineService;
 import com.pricing.engine.pricingStore.PricingRepository;
 import com.pricing.engine.recommendationStore.RecommendationRepository;
 import com.pricing.engine.ruleEngine.RuleEngine;
@@ -47,8 +49,8 @@ import java.time.LocalDate;
 @SpringBootTest(properties = "engine.max-workers=1")
 @AutoConfigureMockMvc
 @Import(MockPricing.class)
-@ExtendWith(H2TestSupport.FixtureLifecycle.class)
-public abstract class H2TestSupport {
+@ExtendWith(H2Fixture.FixtureLifecycle.class)
+public abstract class H2Fixture {
 
 	protected static final ExecutorService HTTP_EXECUTOR = Executors.newVirtualThreadPerTaskExecutor();
 	protected static final List<WakeUp> WAKE_UPS = new CopyOnWriteArrayList<>();
@@ -123,7 +125,7 @@ public abstract class H2TestSupport {
 			@Qualifier("recommendationDataSource") DataSource recommendationStore) {
 		accounts = new JdbcTemplate(accountStore);
 		recommendations = new JdbcTemplate(recommendationStore);
-		H2TestSupport.recommendationStore = recommendations;
+		H2Fixture.recommendationStore = recommendations;
 	}
 
 	@BeforeEach
@@ -302,8 +304,8 @@ public abstract class H2TestSupport {
 
 		@Override
 		public void beforeAll(ExtensionContext context) {
-			context.getRoot().getStore(ExtensionContext.Namespace.create(H2TestSupport.class))
-					.getOrComputeIfAbsent(H2TestSupport.class,
+			context.getRoot().getStore(ExtensionContext.Namespace.create(H2Fixture.class))
+					.getOrComputeIfAbsent(H2Fixture.class,
 							key -> (ExtensionContext.Store.CloseableResource) () -> {
 								TRANSACTION_PROCESSOR.stop(0);
 								HTTP_EXECUTOR.close();

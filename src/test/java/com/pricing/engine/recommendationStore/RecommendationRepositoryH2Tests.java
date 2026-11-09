@@ -16,9 +16,9 @@ import org.springframework.dao.DataIntegrityViolationException;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.awaitility.Awaitility.await;
-import com.pricing.engine.H2TestSupport;
+import com.pricing.engine.utils.H2Fixture;
 
-class RecommendationRepositoryH2Tests extends H2TestSupport {
+class RecommendationRepositoryH2Tests extends H2Fixture {
 
 	@Test
 	void competingResultsCommitOnlyOneRecommendationBatch() throws Exception {

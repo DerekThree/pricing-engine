@@ -1,7 +1,7 @@
 package com.pricing.engine.engineService;
 
-import com.pricing.engine.H2TestSupport;
-import com.pricing.engine.MockPricing;
+import com.pricing.engine.utils.H2Fixture;
+import com.pricing.engine.utils.MockPricing;
 
 import java.time.Duration;
 import java.util.List;
@@ -18,7 +18,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.awaitility.Awaitility.await;
 
-class Phase6NotificationDeliveryH2Tests extends H2TestSupport {
+class Phase6NotificationDeliveryH2Tests extends H2Fixture {
 
 	@ParameterizedTest(name = "{0}")
 	@MethodSource("deliveryOutcomes")

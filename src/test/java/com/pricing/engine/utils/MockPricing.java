@@ -1,4 +1,4 @@
-package com.pricing.engine;
+package com.pricing.engine.utils;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;

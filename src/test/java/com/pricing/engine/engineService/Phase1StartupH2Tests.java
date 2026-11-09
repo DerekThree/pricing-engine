@@ -1,7 +1,7 @@
 package com.pricing.engine.engineService;
 
-import com.pricing.engine.H2TestSupport;
-import com.pricing.engine.MockPricing;
+import com.pricing.engine.utils.H2Fixture;
+import com.pricing.engine.utils.MockPricing;
 
 import java.net.ServerSocket;
 import java.sql.SQLTransientConnectionException;
@@ -26,7 +26,7 @@ import static org.mockito.Mockito.doAnswer;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-class Phase1StartupH2Tests extends H2TestSupport {
+class Phase1StartupH2Tests extends H2Fixture {
 
 	@Test
 	void readinessDoesNotWaitForPendingAccountProcessing() throws Exception {
