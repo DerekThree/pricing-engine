@@ -32,7 +32,7 @@ public class RecommendationStoreConfiguration {
 	@Bean(defaultCandidate = false)
 	public HikariDataSource recommendationDataSource(
 			@Qualifier("recommendationDataSourceProperties") DataSourceProperties properties,
-			@Value("${engine.max-workers}") int maxWorkers) {
+			@Value("${engine.max-workers:3}") int maxWorkers) {
 		HikariDataSource dataSource = properties.initializeDataSourceBuilder().type(HikariDataSource.class).build();
 		dataSource.setMaximumPoolSize(Math.max(3, maxWorkers));
 		return dataSource;
