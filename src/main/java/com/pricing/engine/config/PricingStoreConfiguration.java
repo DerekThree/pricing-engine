@@ -6,6 +6,7 @@ import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.util.Map;
 
+import com.zaxxer.hikari.HikariDataSource;
 import org.flywaydb.core.Flyway;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -14,9 +15,19 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.jdbc.autoconfigure.DataSourceProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 
 @Configuration(proxyBeanMethods = false)
 public class PricingStoreConfiguration {
+
+	@Bean
+	@Primary
+	public HikariDataSource dataSource(DataSourceProperties properties,
+			@Value("${engine.max-workers}") int maxWorkers) {
+		HikariDataSource dataSource = properties.initializeDataSourceBuilder().type(HikariDataSource.class).build();
+		dataSource.setMaximumPoolSize(Math.max(3, maxWorkers));
+		return dataSource;
+	}
 
 	@Bean(defaultCandidate = false)
 	@ConfigurationProperties("database-initialization.datasource")
