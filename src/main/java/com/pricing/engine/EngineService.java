@@ -246,6 +246,7 @@ public class EngineService implements SmartInitializingSingleton {
 							return null;
 						}
 						claimed.complete(true);
+						log.info("Pricing Batch received: {}", batchId);
 						if (retryDatabaseOperation(
 								() -> recommendationRepository.existsByBatchId(batchId),
 								recommendationRepository::checkConnection)) {
@@ -320,6 +321,7 @@ public class EngineService implements SmartInitializingSingleton {
 				}
 				return null;
 			}, recommendationRepository::checkConnection);
+			log.info("Pricing Batch stored: {}", result.batchId());
 			pendingResult = null;
 			pendingCompletion = result.batchId();
 			Thread.startVirtualThread(EngineService.this::notifyTransactionProcessor);
