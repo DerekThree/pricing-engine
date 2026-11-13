@@ -133,11 +133,11 @@ class Phase4PersistencePostgresTests extends PostgresFixture {
 		UUID batchId = UUID.randomUUID();
 		var result = new RuleEngineBatchResult(batchId, List.of(
 				new AccountResult("A1", AccountStatus.OK, "JANPLAN", List.of(
-						new FeeResult(41L, FeeStatus.OK, Decision.CHARGED,
+						new FeeResult(41L, FeeStatus.CHARGED,
 								new BigDecimal("12.50"), null),
-						new FeeResult(42L, FeeStatus.OK, Decision.WAIVED, null,
+						new FeeResult(42L, FeeStatus.WAIVED, null,
 								List.of("VIP", "LOYAL")),
-						new FeeResult(43L, FeeStatus.FEE_NOT_FOUND, null, null, null))),
+						new FeeResult(43L, FeeStatus.FEE_NOT_FOUND, null, null))),
 				new AccountResult("A2", AccountStatus.PLAN_NOT_FOUND, null, null)));
 
 		recommendationRepository.save(result);
@@ -159,18 +159,12 @@ class Phase4PersistencePostgresTests extends PostgresFixture {
 		assertEquals(List.of(41L, 42L, 43L), recommendations.queryForList("""
 				select fee_request_id from fee_request_recommendations order by fee_request_id
 				""", Long.class));
-		assertEquals(List.of("OK", "OK", "FEE_NOT_FOUND"), recommendations.queryForList("""
+		assertEquals(List.of("CHARGED", "WAIVED", "FEE_NOT_FOUND"), recommendations.queryForList("""
 				select status from fee_request_recommendations order by fee_request_id
-				""", String.class));
-		assertEquals("CHARGED", recommendations.queryForObject("""
-				select decision from fee_request_recommendations where fee_request_id = 41
 				""", String.class));
 		assertEquals(0, recommendations.queryForObject("""
 				select amount from fee_request_recommendations where fee_request_id = 41
 				""", BigDecimal.class).compareTo(new BigDecimal("12.50")));
-		assertEquals("WAIVED", recommendations.queryForObject("""
-				select decision from fee_request_recommendations where fee_request_id = 42
-				""", String.class));
 		assertNull(recommendations.queryForObject("""
 				select amount from fee_request_recommendations where fee_request_id = 42
 				""", BigDecimal.class));

@@ -1,0 +1,1 @@
+drop trigger fee_request_recommendations_immutable on fee_request_recommendations;

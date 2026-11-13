@@ -48,7 +48,7 @@ import static org.mockito.Mockito.when;
 class Phase2BatchSchedulingH2Tests extends H2Fixture {
 
 	@Test
-	void defaultCapRefillsSlotsAndCoordinatesOverlappingWakeUps() throws Exception {
+	void workersDrainBatchesAndRespectCapAcrossWakeUps() throws Exception {
 		try (var application = startApplication("--engine.max-workers=3")) {
 			EngineService service = application.getBean(EngineService.class);
 			var entered = new LinkedBlockingQueue<Boolean>();
@@ -71,9 +71,10 @@ class Phase2BatchSchedulingH2Tests extends H2Fixture {
 				addAccount(UUID.randomUUID());
 			}
 			try {
-				service.wakeUp();
 				for (int i = 0; i < 3; i++) {
+					service.wakeUp();
 					assertEquals(Boolean.TRUE, entered.poll(5, TimeUnit.SECONDS));
+					assertNull(entered.poll(200, TimeUnit.MILLISECONDS));
 				}
 				service.wakeUp();
 				assertNull(entered.poll(200, TimeUnit.MILLISECONDS));
@@ -138,14 +139,14 @@ class Phase2BatchSchedulingH2Tests extends H2Fixture {
 				}
 				try {
 					var second = other.getBean(EngineService.class);
-					second.wakeUp();
 					for (int i = 0; i < 2; i++) {
+						second.wakeUp();
 						assertEquals(Boolean.TRUE, entered.poll(5, TimeUnit.SECONDS));
 					}
 					second.wakeUp();
 					assertNull(entered.poll(200, TimeUnit.MILLISECONDS));
-					service.wakeUp();
 					for (int i = 0; i < 3; i++) {
+						service.wakeUp();
 						assertEquals(Boolean.TRUE, entered.poll(5, TimeUnit.SECONDS));
 					}
 					assertNull(entered.poll(200, TimeUnit.MILLISECONDS));
@@ -358,7 +359,7 @@ class Phase2BatchSchedulingH2Tests extends H2Fixture {
 	}
 
 	@Test
-	void emptyDiscoveryKeepsItsSlotUntilTheAccountTransactionFinishes() throws Exception {
+	void emptyWorkerReleasesItsSlotAfterTheAccountTransactionFinishes() throws Exception {
 		var committing = new CompletableFuture<Void>();
 		var finishCommit = new CountDownLatch(1);
 		var firstCommit = new AtomicBoolean(true);
@@ -375,21 +376,32 @@ class Phase2BatchSchedulingH2Tests extends H2Fixture {
 		UUID batchId = UUID.randomUUID();
 		try (var work = Executors.newVirtualThreadPerTaskExecutor()) {
 			var processing = work.submit(service::processPendingAccounts);
+			Future<?> wakeUp = null;
 			try {
 				committing.get(5, TimeUnit.SECONDS);
 				await().during(Duration.ofMillis(200)).atMost(Duration.ofSeconds(1))
 						.untilAsserted(() -> assertFalse(processing.isDone()));
 				addAccount(batchId);
-				service.wakeUp();
+				var received = new CountDownLatch(1);
+				wakeUp = work.submit(() -> {
+					received.countDown();
+					service.wakeUp();
+				});
+				assertTrue(received.await(5, TimeUnit.SECONDS));
+				Future<?> pendingWakeUp = wakeUp;
+				await().during(Duration.ofMillis(200)).atMost(Duration.ofSeconds(1))
+						.untilAsserted(() -> assertFalse(pendingWakeUp.isDone()));
 				assertFalse(accounts.queryForObject(
 						"select processed from batch_outbox", Boolean.class));
 			} finally {
 				finishCommit.countDown();
 				processing.get(5, TimeUnit.SECONDS);
 			}
+			wakeUp.get(5, TimeUnit.SECONDS);
 		}
-		assertTrue(accounts.queryForObject(
-				"select processed from batch_outbox where batch_id = ?", Boolean.class, batchId));
+		await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertTrue(
+				accounts.queryForObject("select processed from batch_outbox where batch_id = ?",
+						Boolean.class, batchId)));
 	}
 
 	@Test
@@ -418,8 +430,10 @@ class Phase2BatchSchedulingH2Tests extends H2Fixture {
 					return null;
 				});
 				received.get(5, TimeUnit.SECONDS);
-				wakeUp.get(5, TimeUnit.SECONDS);
+				await().during(Duration.ofMillis(200)).atMost(Duration.ofSeconds(1))
+						.untilAsserted(() -> assertFalse(wakeUp.isDone()));
 				finishScan.complete(null);
+				wakeUp.get(5, TimeUnit.SECONDS);
 			} finally {
 				finishScan.complete(null);
 			}
@@ -433,7 +447,7 @@ class Phase2BatchSchedulingH2Tests extends H2Fixture {
 	}
 
 	static Object delayEmptyScan(Object target) {
-		// Delay the JDBC result after H2 has found no rows, before discovery returns.
+		// Delay the JDBC result after H2 has found no rows, before the worker exits.
 		Class<?> type = target instanceof Connection ? Connection.class
 				: target instanceof PreparedStatement ? PreparedStatement.class : ResultSet.class;
 		return intercept(target, type, (method, arguments, proceed) -> {

@@ -96,10 +96,15 @@ class RecommendationStoreInitializationPostgresTests {
 			JdbcTemplate processor = new JdbcTemplate(processorDataSource);
 			RecommendationRepository repository = context.getBean(RecommendationRepository.class);
 			repository.save(new RuleEngineBatchResult(batchId, List.of(new AccountResult(
-					"A1", AccountStatus.OK, "PLAN", List.of(new FeeResult(42L, FeeStatus.OK,
-							Decision.WAIVED, null, List.of("ELIGIBLE")))))));
+					"A1", AccountStatus.OK, "PLAN", List.of(new FeeResult(42L, FeeStatus.WAIVED, null, List.of("ELIGIBLE")))))));
 			assertThat(repository.existsByBatchId(batchId)).isTrue();
 			assertThat(repository.existsByProcessedFalse()).isTrue();
+			assertThat(engine.queryForObject(
+					"select status from fee_request_recommendations", String.class)).isEqualTo("WAIVED");
+			assertThat(engine.queryForObject("""
+					select count(*) from information_schema.columns
+					where table_name = 'fee_request_recommendations' and column_name = 'decision'
+					""", Integer.class)).isZero();
 			assertThat(engine.queryForObject("select current_user", String.class))
 					.isEqualTo("recommendationdb_engine");
 			for (String table : TABLES) {
@@ -162,7 +167,7 @@ class RecommendationStoreInitializationPostgresTests {
 				databaseUrl("recommendationdb"), "store_initializer", "initialization-password"));
 		var history = initialization.queryForList(
 				"select * from flyway_schema_history order by installed_rank");
-		assertThat(history).hasSize(4);
+		assertThat(history).hasSize(7);
 		assertThat(initialization.queryForList("select distinct tableowner from pg_tables "
 				+ "where schemaname = 'public'", String.class)).containsExactly("store_initializer");
 		initialization.execute("alter table recommendation_outbox add column processing_note text");

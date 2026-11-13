@@ -6,6 +6,7 @@ import java.util.Locale;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
 import java.util.function.BooleanSupplier;
 
@@ -30,7 +31,8 @@ import org.springframework.http.HttpStatusCode;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.support.DefaultTransactionDefinition;
 import org.springframework.util.Assert;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
@@ -53,12 +55,9 @@ public class EngineService implements SmartInitializingSingleton {
 
 	private final Duration databaseRecoveryCheckInterval;
 	private final int maxWorkers;
-	private final TransactionTemplate accountTransaction;
-	private final Object processingLock = new Object();
+	private final PlatformTransactionManager accountTransactionManager;
+	private final ReentrantLock processingLock = new ReentrantLock();
 	private int workers;
-	private boolean discovering;
-	private boolean claiming;
-	private boolean discoveryRequested;
 	private CompletableFuture<Void> completion = CompletableFuture.completedFuture(null);
 
 	public EngineService(AccountRepository accountRepository, RuleEngine ruleEngine,
@@ -73,7 +72,7 @@ public class EngineService implements SmartInitializingSingleton {
 			@Qualifier("accountTransactionManager") PlatformTransactionManager transactionManager) {
 		Assert.isTrue(maxWorkers > 0, "Worker limit must be positive");
 		this.maxWorkers = maxWorkers;
-		this.accountTransaction = new TransactionTemplate(transactionManager);
+		this.accountTransactionManager = transactionManager;
 		Assert.isTrue(maxAttempts > 0, "Transaction Processor attempt limit must be positive");
 		Assert.isTrue(!retryDelay.isNegative(),
 				"Transaction Processor retry delay must not be negative");
@@ -106,9 +105,8 @@ public class EngineService implements SmartInitializingSingleton {
 	}
 
 	public void processPendingAccounts() {
-		CompletableFuture<Void> run = startDiscovery();
+		CompletableFuture<Void> run = startWorkers(maxWorkers);
 		if (run != null) {
-			discover();
 			try {
 				run.join();
 			} catch (CompletionException ex) {
@@ -121,9 +119,7 @@ public class EngineService implements SmartInitializingSingleton {
 	}
 
 	public void wakeUp() {
-		if (startDiscovery() != null) {
-			Thread.startVirtualThread(this::discover);
-		}
+		startWorkers(1);
 	}
 
 	public void notifyTransactionProcessor() {
@@ -158,69 +154,42 @@ public class EngineService implements SmartInitializingSingleton {
 		}
 	}
 
-	private CompletableFuture<Void> startDiscovery() {
-		synchronized (processingLock) {
-			if (workers == maxWorkers && !claiming) {
+	private CompletableFuture<Void> startWorkers(int limit) {
+		processingLock.lock();
+		try {
+			if (workers == maxWorkers) {
 				return null;
 			}
-			if (discovering) {
-				discoveryRequested = true;
-				return null;
-			}
-			discovering = true;
 			if (workers == 0) {
 				completion = new CompletableFuture<>();
 			}
+			int count = Math.min(limit, maxWorkers - workers);
+			for (int i = 0; i < count; i++) {
+				workers++;
+				Thread.startVirtualThread(new Worker(completion)::run);
+			}
 			return completion;
+		} finally {
+			processingLock.unlock();
 		}
 	}
 
-	private void discover() {
-		while (true) {
-			Worker worker;
-			synchronized (processingLock) {
-				if (workers == maxWorkers) {
-					discovering = false;
-					return;
-				}
-				discoveryRequested = false;
-				claiming = true;
-				worker = new Worker(completion);
-				workers++;
-				Thread.startVirtualThread(worker::run);
+	private void releaseWorker() {
+		processingLock.lock();
+		try {
+			workers--;
+			if (workers == 0) {
+				completion.complete(null);
 			}
-			boolean admitted = false;
-			boolean failed = false;
-			try {
-				admitted = worker.claimed.join();
-			} catch (CompletionException ex) {
-				failed = true;
-				worker.runCompletion.completeExceptionally(ex.getCause());
-			}
-			synchronized (processingLock) {
-				claiming = false;
-				if (!admitted) {
-					workers--;
-					if (failed || !discoveryRequested) {
-						discovering = false;
-						if (workers == 0) {
-							completion.complete(null);
-						}
-						return;
-					}
-				}
-			}
+		} finally {
+			processingLock.unlock();
 		}
 	}
 
 	private class Worker {
-		private final CompletableFuture<Boolean> claimed = new CompletableFuture<>();
 		private final CompletableFuture<Void> runCompletion;
-		private RuleEngineBatchResult pendingResult;
-		private UUID pendingCompletion;
-		private UUID failedBatch;
-		private RuntimeException pendingError;
-		private boolean admitted;
+		private TransactionStatus transaction;
+		private UUID batchId;
 
 		Worker(CompletableFuture<Void> runCompletion) {
 			this.runCompletion = runCompletion;
@@ -228,79 +197,85 @@ public class EngineService implements SmartInitializingSingleton {
 
 		void run() {
 			try {
-				retryDatabaseOperation(() -> accountTransaction.execute(status -> {
-					if (pendingError != null && pendingCompletion == null) {
-						if (accountRepository.claimBatchId(failedBatch) == null) {
-							return null;
-						}
-						if (retryDatabaseOperation(
-								() -> recommendationRepository.existsByBatchId(failedBatch),
-								recommendationRepository::checkConnection)) {
-							pendingCompletion = failedBatch;
-							pendingError = null;
-						}
-					} else if (pendingCompletion == null && pendingResult == null) {
-						UUID batchId = accountRepository.claimNextBatchId();
-						admitted |= batchId != null;
-						if (batchId == null) {
-							return null;
-						}
-						claimed.complete(true);
-						log.info("Pricing Batch received: {}", batchId);
-						if (retryDatabaseOperation(
-								() -> recommendationRepository.existsByBatchId(batchId),
-								recommendationRepository::checkConnection)) {
-							pendingCompletion = batchId;
-						} else {
-							RuleEngineBatch batch = accountRepository.load(batchId);
-							try {
-								pendingResult = retryDatabaseOperation(() -> ruleEngine.price(batch),
-										pricingRepository::checkConnection);
-							} catch (RuntimeException ex) {
-								if (isTemporaryDatabaseFailure(ex)) {
-									throw ex;
-								}
-								log.error("Rule-engine evaluation failed for batch {}", batchId, ex);
-								failedBatch = batchId;
-								pendingError = ex;
-							}
-						}
-					}
-					if (pendingError != null) {
-						retryDatabaseOperation(() -> {
-							accountRepository.recordError(failedBatch, pendingError);
-							return null;
-						}, accountRepository::checkConnection, () -> !status.isRollbackOnly());
-						return null;
-					}
-					if (pendingResult != null) {
-						storePendingResult();
-					}
-					accountRepository.markProcessed(pendingCompletion);
-					return null;
-				}), accountRepository::checkConnection);
-				claimed.complete(false);
+				while (processNextBatch()) { }
 			} catch (RuntimeException | Error ex) {
-				claimed.completeExceptionally(ex);
 				runCompletion.completeExceptionally(ex);
+				releaseWorker();
 				log.error("Batch worker failed", ex);
-			} finally {
-				if (admitted) {
-					synchronized (processingLock) {
-						workers--;
-						if (discovering) {
-							discoveryRequested = true;
-						} else {
-							discovering = true;
-							Thread.startVirtualThread(EngineService.this::discover);
-						}
-					}
-				}
 			}
 		}
 
-		private void storePendingResult() {
-			RuleEngineBatchResult result = pendingResult;
+		private boolean processNextBatch() {
+			try {
+				RuleEngineBatch batch = retryAccountOperation(this::claimAndLoad);
+				if (batchId == null) {
+					return false;
+				}
+				if (batch != null) {
+					RuleEngineBatchResult result;
+					try {
+						result = retryDatabaseOperation(() -> ruleEngine.price(batch),
+								pricingRepository::checkConnection);
+					} catch (RuntimeException ex) {
+						if (isTemporaryDatabaseFailure(ex)) {
+							throw ex;
+						}
+						log.error("Rule-engine evaluation failed for batch {}", batchId, ex);
+						recordEvaluationError(ex);
+						return true;
+					}
+					storeResult(result);
+				}
+				completeBatch();
+				return true;
+			} finally {
+				rollbackAccountTransaction();
+			}
+		}
+
+		private RuleEngineBatch claimAndLoad() {
+			processingLock.lock();
+			batchId = accountRepository.claimNextBatchId();
+			if (batchId == null) {
+				commitAccountTransaction();
+				releaseWorker();
+				return null;
+			}
+			processingLock.unlock();
+			log.info("Pricing Batch received: {}", batchId);
+			if (retryDatabaseOperation(() -> recommendationRepository.existsByBatchId(batchId),
+					recommendationRepository::checkConnection)) {
+				return null;
+			}
+			return accountRepository.load(batchId);
+		}
+
+		private void recordEvaluationError(RuntimeException failure) {
+			TransactionStatus claim = transaction;
+			boolean recommendationsStored = retryAccountOperation(() -> {
+				if (transaction != claim) {
+					if (accountRepository.claimBatchId(batchId) == null) {
+						commitAccountTransaction();
+						return false;
+					}
+					if (retryDatabaseOperation(() -> recommendationRepository.existsByBatchId(batchId),
+							recommendationRepository::checkConnection)) {
+						return true;
+					}
+				}
+				retryDatabaseOperation(() -> {
+					accountRepository.recordError(batchId, failure);
+					return null;
+				}, accountRepository::checkConnection, () -> !transaction.isRollbackOnly());
+				commitAccountTransaction();
+				return false;
+			});
+			if (recommendationsStored) {
+				completeBatch();
+			}
+		}
+
+		private void storeResult(RuleEngineBatchResult result) {
 			retryDatabaseOperation(() -> {
 				try {
 					recommendationRepository.save(result);
@@ -322,9 +297,52 @@ public class EngineService implements SmartInitializingSingleton {
 				return null;
 			}, recommendationRepository::checkConnection);
 			log.info("Pricing Batch stored: {}", result.batchId());
-			pendingResult = null;
-			pendingCompletion = result.batchId();
 			Thread.startVirtualThread(EngineService.this::notifyTransactionProcessor);
+		}
+
+		private void completeBatch() {
+			retryAccountOperation(() -> {
+				accountRepository.markProcessed(batchId);
+				commitAccountTransaction();
+				return null;
+			});
+		}
+
+		private <T> T retryAccountOperation(Supplier<T> operation) {
+			return retryDatabaseOperation(() -> {
+				try {
+					if (transaction == null) {
+						transaction = accountTransactionManager.getTransaction(
+								new DefaultTransactionDefinition());
+					}
+					return operation.get();
+				} catch (RuntimeException | Error ex) {
+					rollbackAccountTransaction();
+					throw ex;
+				} finally {
+					// Keep an empty claim locked through its commit and slot release.
+					if (processingLock.isHeldByCurrentThread()) {
+						processingLock.unlock();
+					}
+				}
+			}, accountRepository::checkConnection);
+		}
+
+		private void commitAccountTransaction() {
+			accountTransactionManager.commit(transaction);
+			transaction = null;
+		}
+
+		private void rollbackAccountTransaction() {
+			if (transaction != null) {
+				try {
+					if (!transaction.isCompleted()) {
+						accountTransactionManager.rollback(transaction);
+					}
+				} finally {
+					transaction = null;
+				}
+			}
 		}
 	}
 

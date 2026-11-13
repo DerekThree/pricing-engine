@@ -24,7 +24,6 @@ public record RuleEngineBatchResult(UUID batchId, List<AccountResult> accounts) 
 	public record FeeResult(
 			Long feeRequestId,
 			FeeStatus status,
-			Decision decision,
 			BigDecimal amount,
 			List<String> reasons) {
 
@@ -45,16 +44,12 @@ public record RuleEngineBatchResult(UUID batchId, List<AccountResult> accounts) 
 	}
 
 	public enum FeeStatus {
-		OK,
+		CHARGED,
+		WAIVED,
 		FEE_NOT_FOUND,
 		MISSING_TRANSACTION,
 		INVALID_TRANSACTION_AMOUNT,
 		INVALID_ELIGIBILITY_CONDITION,
 		ERROR
-	}
-
-	public enum Decision {
-		CHARGED,
-		WAIVED
 	}
 }

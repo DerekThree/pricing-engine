@@ -34,7 +34,7 @@ public class RecommendationMapper {
 			FeeResult result, AccountRecommendationEntity account) {
 		return FeeRequestRecommendationEntity.builder()
 				.account(account).feeRequestId(result.feeRequestId()).status(result.status())
-				.decision(result.decision()).amount(result.amount())
+				.amount(result.amount())
 				.reasons(result.reasons() == null ? List.of() : result.reasons()).build();
 	}
 }

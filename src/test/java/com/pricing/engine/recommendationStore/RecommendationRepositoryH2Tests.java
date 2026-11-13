@@ -37,7 +37,7 @@ class RecommendationRepositoryH2Tests extends H2Fixture {
 					try {
 						repository.save(new RuleEngineBatchResult(batchId, List.of(
 								new AccountResult("A1", AccountStatus.OK, plan, List.of(
-										new FeeResult(42L, FeeStatus.OK, Decision.CHARGED,
+										new FeeResult(42L, FeeStatus.CHARGED,
 												new BigDecimal("2.50"), null))))));
 						return plan;
 					} catch (DataIntegrityViolationException ex) {

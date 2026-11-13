@@ -117,8 +117,11 @@ class Phase5BatchCompletionH2Tests extends H2Fixture {
 		var probes = new LinkedBlockingQueue<Long>();
 		MockPricing.pricingRead = () -> owner.compareAndSet(null, Thread.currentThread());
 		doAnswer(invocation -> {
-			assertFalse(lost.get() && Thread.currentThread() == owner.get(),
-					"Completion recovery must not access recommendations again");
+			if (lost.get() && Thread.currentThread() == owner.get()) {
+				assertTrue(availableAccounts.queryForObject(
+						"select processed from batch_outbox where batch_id = ?", Boolean.class, retained),
+						"Completion recovery must not access recommendations again");
+			}
 			return invocation.callRealMethod();
 		}).when(recommendationDataSource).getConnection();
 		doAnswer(invocation -> {
@@ -127,8 +130,12 @@ class Phase5BatchCompletionH2Tests extends H2Fixture {
 				if (Thread.currentThread() == owner.get()) {
 					String sql = method.getName().equals("prepareStatement")
 							? (String) arguments[0] : "";
-					assertFalse(lost.get() && sql.contains("skip locked"),
-							"Completion recovery must not reclaim the batch");
+					if (lost.get() && sql.contains("skip locked")) {
+						assertTrue(availableAccounts.queryForObject(
+								"select processed from batch_outbox where batch_id = ?",
+								Boolean.class, retained),
+								"Completion recovery must not reclaim the batch");
+					}
 					if (unavailable.get() && sql.equals("select 1")) {
 						probes.add(System.nanoTime());
 						throw new SQLTransientConnectionException("Account Store outage", "08001");

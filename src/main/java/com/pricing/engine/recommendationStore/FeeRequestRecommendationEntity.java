@@ -4,7 +4,6 @@ import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 
-import com.pricing.engine.ruleEngine.RuleEngineBatchResult.Decision;
 import com.pricing.engine.ruleEngine.RuleEngineBatchResult.FeeStatus;
 
 import jakarta.persistence.CollectionTable;
@@ -50,10 +49,6 @@ public class FeeRequestRecommendationEntity {
 	@Enumerated(EnumType.STRING)
 	@Column(nullable = false, length = 35)
 	private FeeStatus status;
-
-	@Enumerated(EnumType.STRING)
-	@Column(length = 10)
-	private Decision decision;
 
 	@Column(columnDefinition = "numeric")
 	private BigDecimal amount;

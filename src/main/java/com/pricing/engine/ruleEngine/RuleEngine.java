@@ -158,7 +158,6 @@ public class RuleEngine {
 						request.feeRequestId(),
 						FeeStatus.FEE_NOT_FOUND,
 						null,
-						null,
 						null);
 			}
 			PlanFee fee = requireOne(matches, "Pricing Plan Fee");
@@ -166,7 +165,6 @@ public class RuleEngine {
 				return new FeeResult(
 						request.feeRequestId(),
 						FeeStatus.MISSING_TRANSACTION,
-						null,
 						null,
 						null);
 			}
@@ -177,7 +175,6 @@ public class RuleEngine {
 						request.feeRequestId(),
 						FeeStatus.INVALID_TRANSACTION_AMOUNT,
 						null,
-						null,
 						null);
 			}
 			if (fee.reasons().stream()
@@ -186,7 +183,6 @@ public class RuleEngine {
 				return new FeeResult(
 						request.feeRequestId(),
 						FeeStatus.INVALID_ELIGIBILITY_CONDITION,
-						null,
 						null,
 						null);
 			}
@@ -199,8 +195,7 @@ public class RuleEngine {
 			if (!reasons.isEmpty()) {
 				return new FeeResult(
 						request.feeRequestId(),
-						FeeStatus.OK,
-						Decision.WAIVED,
+						FeeStatus.WAIVED,
 						null,
 						reasons);
 			}
@@ -211,12 +206,11 @@ public class RuleEngine {
 			};
 			return new FeeResult(
 					request.feeRequestId(),
-					FeeStatus.OK,
-					Decision.CHARGED,
+					FeeStatus.CHARGED,
 					amount.setScale(2, RoundingMode.HALF_UP),
 					null);
 		} catch (RuntimeException exception) {
-			return new FeeResult(request.feeRequestId(), FeeStatus.ERROR, null, null, null);
+			return new FeeResult(request.feeRequestId(), FeeStatus.ERROR, null, null);
 		}
 	}
 

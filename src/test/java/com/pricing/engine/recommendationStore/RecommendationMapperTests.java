@@ -20,11 +20,11 @@ class RecommendationMapperTests {
 		UUID batchId = UUID.fromString("b566f38a-0d68-4adb-8a86-84b0d945d645");
 		var result = new RuleEngineBatchResult(batchId, List.of(
 				new AccountResult("A1", AccountStatus.OK, "PLAN1", List.of(
-						new FeeResult(41L, FeeStatus.OK, Decision.CHARGED,
+						new FeeResult(41L, FeeStatus.CHARGED,
 								new BigDecimal("12.50"), null),
-						new FeeResult(42L, FeeStatus.OK, Decision.WAIVED,
+						new FeeResult(42L, FeeStatus.WAIVED,
 								BigDecimal.ZERO, List.of("VIP", "LOYAL")),
-						new FeeResult(43L, FeeStatus.FEE_NOT_FOUND, null, null, null))),
+						new FeeResult(43L, FeeStatus.FEE_NOT_FOUND, null, null))),
 				new AccountResult("A2", AccountStatus.PLAN_NOT_FOUND, null, null)));
 
 		var stored = new RecommendationMapper().toEntity(result);
@@ -39,8 +39,8 @@ class RecommendationMapperTests {
 		assertEquals(List.of(41L, 42L, 43L), account.getFees().stream()
 				.map(FeeRequestRecommendationEntity::getFeeRequestId).toList());
 		assertEquals(new BigDecimal("12.50"), account.getFees().getFirst().getAmount());
-		assertEquals(Decision.CHARGED, account.getFees().getFirst().getDecision());
-		assertEquals(Decision.WAIVED, account.getFees().get(1).getDecision());
+		assertEquals(FeeStatus.CHARGED, account.getFees().getFirst().getStatus());
+		assertEquals(FeeStatus.WAIVED, account.getFees().get(1).getStatus());
 		assertEquals(List.of("VIP", "LOYAL"), account.getFees().get(1).getReasons());
 		assertEquals(FeeStatus.FEE_NOT_FOUND, account.getFees().getLast().getStatus());
 		assertEquals(AccountStatus.PLAN_NOT_FOUND, stored.getAccounts().getLast().getStatus());

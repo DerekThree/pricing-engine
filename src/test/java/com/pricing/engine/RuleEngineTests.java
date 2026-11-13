@@ -302,8 +302,7 @@ class RuleEngineTests {
 						new AccountAttribute("ATTR0003", false)));
 
 		FeeResult fee = result.accounts().getFirst().fees().getFirst();
-		assertEquals(FeeStatus.OK, fee.status());
-		assertEquals(Decision.WAIVED, fee.decision());
+		assertEquals(FeeStatus.WAIVED, fee.status());
 		assertEquals(null, fee.amount());
 		assertEquals(Set.of("TEXT_REASON", "AMOUNT_REASON"), Set.copyOf(fee.reasons()));
 	}
@@ -508,18 +507,17 @@ class RuleEngineTests {
 	private FeeResult chargedFee(long feeRequestId, String amount) {
 		return new FeeResult(
 				feeRequestId,
-				FeeStatus.OK,
-				Decision.CHARGED,
+				FeeStatus.CHARGED,
 				new BigDecimal(amount),
 				null);
 	}
 
 	private FeeResult waivedFee(String... reasons) {
-		return new FeeResult(1L, FeeStatus.OK, Decision.WAIVED, null, List.of(reasons));
+		return new FeeResult(1L, FeeStatus.WAIVED, null, List.of(reasons));
 	}
 
 	private FeeResult failedFee(FeeStatus status) {
-		return new FeeResult(1L, status, null, null, null);
+		return new FeeResult(1L, status, null, null);
 	}
 
 	private RuleEngineBatchResult failedResult(AccountStatus status) {
@@ -587,13 +585,13 @@ class RuleEngineTests {
 	private static Stream<Arguments> percentageFees() {
 		return Stream.of(
 				arguments("half-up rounding", new BigDecimal("123.45"), false,
-						new FeeResult(1L, FeeStatus.OK, Decision.CHARGED, new BigDecimal("6.17"), null)),
+						new FeeResult(1L, FeeStatus.CHARGED, new BigDecimal("6.17"), null)),
 				arguments("missing transaction", null, false,
-						new FeeResult(1L, FeeStatus.MISSING_TRANSACTION, null, null, null)),
+						new FeeResult(1L, FeeStatus.MISSING_TRANSACTION, null, null)),
 				arguments("zero amount", new BigDecimal("0.00"), false,
-						new FeeResult(1L, FeeStatus.OK, Decision.CHARGED, new BigDecimal("0.00"), null)),
+						new FeeResult(1L, FeeStatus.CHARGED, new BigDecimal("0.00"), null)),
 				arguments("waived", new BigDecimal("10.00"), true,
-						new FeeResult(1L, FeeStatus.OK, Decision.WAIVED, null, List.of("ALWAYS"))));
+						new FeeResult(1L, FeeStatus.WAIVED, null, List.of("ALWAYS"))));
 	}
 
 	private static Stream<Arguments> invalidConditions() {
