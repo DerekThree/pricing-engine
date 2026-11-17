@@ -6,11 +6,6 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
-import com.pricing.engine.pricingStore.BranchEntity;
-import com.pricing.engine.pricingStore.EligibilityReasonEntity;
-import com.pricing.engine.pricingStore.PricingPlanEntity;
-import com.pricing.engine.pricingStore.PricingPlanFeeEntity;
-import com.pricing.engine.pricingStore.RegionEntity;
 import com.pricing.engine.ruleEngine.Pricing;
 import com.pricing.engine.ruleEngine.RuleEngineRepository;
 

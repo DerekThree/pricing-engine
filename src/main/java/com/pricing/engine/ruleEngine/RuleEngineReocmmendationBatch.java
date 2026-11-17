@@ -4,9 +4,9 @@ import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
 
-public record RuleEngineBatchResult(UUID batchId, List<AccountResult> accounts) {
+public record RuleEngineReocmmendationBatch(UUID batchId, List<AccountResult> accounts) {
 
-	public RuleEngineBatchResult {
+	public RuleEngineReocmmendationBatch {
 		accounts = List.copyOf(accounts);
 	}
 

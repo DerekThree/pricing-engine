@@ -16,8 +16,8 @@ import com.pricing.engine.ruleEngine.Pricing.FeeType;
 import com.pricing.engine.ruleEngine.Pricing.Plan;
 import com.pricing.engine.ruleEngine.Pricing.PlanFee;
 import com.pricing.engine.ruleEngine.Pricing.Region;
-import com.pricing.engine.ruleEngine.RuleEngineBatch.*;
-import com.pricing.engine.ruleEngine.RuleEngineBatchResult.*;
+import com.pricing.engine.ruleEngine.RuleEngineAccountBatch.*;
+import com.pricing.engine.ruleEngine.RuleEngineReocmmendationBatch.*;
 
 import org.springframework.stereotype.Component;
 
@@ -30,7 +30,7 @@ public class RuleEngine {
 		this.pricingRepository = pricingRepository;
 	}
 
-	public RuleEngineBatchResult price(RuleEngineBatch batch) {
+	public RuleEngineReocmmendationBatch price(RuleEngineAccountBatch batch) {
 		Set<LocalDate> pricingDates = batch.accounts().stream()
 				.map(Account::pricingDate)
 				.collect(Collectors.toUnmodifiableSet());
@@ -40,7 +40,7 @@ public class RuleEngine {
 		} catch (RuntimeException exception) {
 			throw new PricingAccessException(exception);
 		}
-		return new RuleEngineBatchResult(batch.batchId(), batch.accounts().stream()
+		return new RuleEngineReocmmendationBatch(batch.batchId(), batch.accounts().stream()
 				.map(account -> price(account, pricing))
 				.toList());
 	}
@@ -98,7 +98,7 @@ public class RuleEngine {
 					.map(AttributeDefinition::code)
 					.collect(Collectors.toSet());
 			Set<String> suppliedAttributeCodes = account.attributes().stream()
-					.map(RuleEngineBatch.AccountAttribute::code)
+					.map(RuleEngineAccountBatch.AccountAttribute::code)
 					.collect(Collectors.toSet());
 			if (requiredAttributeCodes.stream().anyMatch(code -> account.attributes().stream()
 							.filter(attribute -> attribute.code().equals(code))

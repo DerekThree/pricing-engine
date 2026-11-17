@@ -7,7 +7,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import com.pricing.engine.utils.PostgresFixture;
-import com.pricing.engine.ruleEngine.RuleEngineBatch;
+import com.pricing.engine.ruleEngine.RuleEngineAccountBatch;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -29,16 +29,16 @@ class AccountRepositoryPostgresTests extends PostgresFixture {
 					""", accountId, attribute.getKey(), attribute.getValue());
 		}
 
-		RuleEngineBatch batch = accountRepository.load(batchId);
+		RuleEngineAccountBatch batch = accountRepository.load(batchId);
 
 		assertEquals(batchId, batch.batchId());
 		assertEquals(Set.of(LocalDate.of(2026, 1, 15), LocalDate.of(2026, 2, 15)),
-				batch.accounts().stream().map(RuleEngineBatch.Account::pricingDate)
+				batch.accounts().stream().map(RuleEngineAccountBatch.Account::pricingDate)
 						.collect(Collectors.toSet()));
 		var first = batch.accounts().stream().filter(a -> a.accountNumber().equals("A1"))
 				.findFirst().orElseThrow();
 		var attributes = first.attributes().stream().collect(Collectors.toMap(
-				RuleEngineBatch.AccountAttribute::code, RuleEngineBatch.AccountAttribute::value));
+				RuleEngineAccountBatch.AccountAttribute::code, RuleEngineAccountBatch.AccountAttribute::value));
 		assertEquals(true, attributes.get("VIP"));
 		assertEquals("GOLD", attributes.get("TIER"));
 		assertEquals(0, ((BigDecimal) attributes.get("BALANCE"))

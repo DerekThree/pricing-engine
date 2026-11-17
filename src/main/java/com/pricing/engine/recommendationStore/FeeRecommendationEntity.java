@@ -4,7 +4,7 @@ import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 
-import com.pricing.engine.ruleEngine.RuleEngineBatchResult.FeeStatus;
+import com.pricing.engine.ruleEngine.RuleEngineReocmmendationBatch.FeeStatus;
 
 import jakarta.persistence.CollectionTable;
 import jakarta.persistence.Column;
@@ -33,7 +33,7 @@ import lombok.Setter;
 @Setter
 @NoArgsConstructor
 @Table(name = "fee_request_recommendations")
-public class FeeRequestRecommendationEntity {
+public class FeeRecommendationEntity {
 
 	@Id
 	@GeneratedValue(strategy = GenerationType.IDENTITY)

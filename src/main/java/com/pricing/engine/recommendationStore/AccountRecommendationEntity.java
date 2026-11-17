@@ -3,7 +3,7 @@ package com.pricing.engine.recommendationStore;
 import java.util.ArrayList;
 import java.util.List;
 
-import com.pricing.engine.ruleEngine.RuleEngineBatchResult.AccountStatus;
+import com.pricing.engine.ruleEngine.RuleEngineReocmmendationBatch.AccountStatus;
 
 import jakarta.persistence.CascadeType;
 import jakarta.persistence.Column;
@@ -54,5 +54,5 @@ public class AccountRecommendationEntity {
 
 	@Default
 	@OneToMany(mappedBy = "account", cascade = CascadeType.ALL, orphanRemoval = true)
-	private List<FeeRequestRecommendationEntity> fees = new ArrayList<>();
+	private List<FeeRecommendationEntity> fees = new ArrayList<>();
 }

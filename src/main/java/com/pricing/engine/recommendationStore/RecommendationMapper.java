@@ -4,14 +4,14 @@ import java.util.List;
 
 import org.springframework.stereotype.Component;
 
-import com.pricing.engine.ruleEngine.RuleEngineBatchResult;
-import com.pricing.engine.ruleEngine.RuleEngineBatchResult.AccountResult;
-import com.pricing.engine.ruleEngine.RuleEngineBatchResult.FeeResult;
+import com.pricing.engine.ruleEngine.RuleEngineReocmmendationBatch;
+import com.pricing.engine.ruleEngine.RuleEngineReocmmendationBatch.AccountResult;
+import com.pricing.engine.ruleEngine.RuleEngineReocmmendationBatch.FeeResult;
 
 @Component
 public class RecommendationMapper {
 
-	public RecommendationOutboxEntity toEntity(RuleEngineBatchResult result) {
+	public RecommendationOutboxEntity toEntity(RuleEngineReocmmendationBatch result) {
 		RecommendationOutboxEntity batch = RecommendationOutboxEntity.builder()
 				.batchId(result.batchId()).processed(false).build();
 		batch.setAccounts(result.accounts().stream().map(account -> toAccount(account, batch))
@@ -30,9 +30,9 @@ public class RecommendationMapper {
 		return account;
 	}
 
-	private FeeRequestRecommendationEntity toFee(
+	private FeeRecommendationEntity toFee(
 			FeeResult result, AccountRecommendationEntity account) {
-		return FeeRequestRecommendationEntity.builder()
+		return FeeRecommendationEntity.builder()
 				.account(account).feeRequestId(result.feeRequestId()).status(result.status())
 				.amount(result.amount())
 				.reasons(result.reasons() == null ? List.of() : result.reasons()).build();

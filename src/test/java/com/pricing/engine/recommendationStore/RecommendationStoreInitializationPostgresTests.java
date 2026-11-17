@@ -14,8 +14,8 @@ import com.pricing.engine.config.PricingStoreConfiguration;
 import com.pricing.engine.config.RecommendationStoreConfiguration;
 import com.pricing.engine.recommendationStore.RecommendationMapper;
 import com.pricing.engine.recommendationStore.RecommendationRepository;
-import com.pricing.engine.ruleEngine.RuleEngineBatchResult;
-import com.pricing.engine.ruleEngine.RuleEngineBatchResult.*;
+import com.pricing.engine.ruleEngine.RuleEngineReocmmendationBatch;
+import com.pricing.engine.ruleEngine.RuleEngineReocmmendationBatch.*;
 import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.FlywayException;
 import org.junit.jupiter.api.BeforeAll;
@@ -95,7 +95,7 @@ class RecommendationStoreInitializationPostgresTests {
 			JdbcTemplate engine = new JdbcTemplate(engineDataSource);
 			JdbcTemplate processor = new JdbcTemplate(processorDataSource);
 			RecommendationRepository repository = context.getBean(RecommendationRepository.class);
-			repository.save(new RuleEngineBatchResult(batchId, List.of(new AccountResult(
+			repository.save(new RuleEngineReocmmendationBatch(batchId, List.of(new AccountResult(
 					"A1", AccountStatus.OK, "PLAN", List.of(new FeeResult(42L, FeeStatus.WAIVED, null, List.of("ELIGIBLE")))))));
 			assertThat(repository.existsByBatchId(batchId)).isTrue();
 			assertThat(repository.existsByProcessedFalse()).isTrue();

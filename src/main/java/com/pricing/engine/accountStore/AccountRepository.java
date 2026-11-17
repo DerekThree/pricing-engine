@@ -11,7 +11,7 @@ import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.json.JsonMapper;
 
-import com.pricing.engine.ruleEngine.RuleEngineBatch;
+import com.pricing.engine.ruleEngine.RuleEngineAccountBatch;
 
 @Repository
 public class AccountRepository {
@@ -42,7 +42,7 @@ public class AccountRepository {
 	}
 
 	@Transactional(transactionManager = "accountTransactionManager", readOnly = true)
-	public RuleEngineBatch load(UUID batchId) {
+	public RuleEngineAccountBatch load(UUID batchId) {
 		List<AccountEntity> accounts = entityManager.createQuery("""
 				select account from AccountEntity account where account.batch.batchId = :batchId
 				""", AccountEntity.class).setParameter("batchId", batchId).getResultList();
@@ -54,7 +54,7 @@ public class AccountRepository {
 				select distinct account from AccountEntity account
 				left join fetch account.fees where account.batch.batchId = :batchId
 				""", AccountEntity.class).setParameter("batchId", batchId).getResultList();
-		return mapper.toRuleEngineBatch(batchId, accounts);
+		return mapper.toRuleEngineAccountBatch(batchId, accounts);
 	}
 
 	@Transactional(transactionManager = "accountTransactionManager")

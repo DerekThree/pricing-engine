@@ -6,8 +6,8 @@ import java.util.UUID;
 
 import org.junit.jupiter.api.Test;
 
-import com.pricing.engine.ruleEngine.RuleEngineBatchResult;
-import com.pricing.engine.ruleEngine.RuleEngineBatchResult.*;
+import com.pricing.engine.ruleEngine.RuleEngineReocmmendationBatch;
+import com.pricing.engine.ruleEngine.RuleEngineReocmmendationBatch.*;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -18,7 +18,7 @@ class RecommendationMapperTests {
 	@Test
 	void preservesCompleteAccountAndFeeRequestOutcomesWithOneCorrelatedOutbox() {
 		UUID batchId = UUID.fromString("b566f38a-0d68-4adb-8a86-84b0d945d645");
-		var result = new RuleEngineBatchResult(batchId, List.of(
+		var result = new RuleEngineReocmmendationBatch(batchId, List.of(
 				new AccountResult("A1", AccountStatus.OK, "PLAN1", List.of(
 						new FeeResult(41L, FeeStatus.CHARGED,
 								new BigDecimal("12.50"), null),
@@ -37,7 +37,7 @@ class RecommendationMapperTests {
 		assertEquals(AccountStatus.OK, account.getStatus());
 		assertEquals("PLAN1", account.getPricingPlanCode());
 		assertEquals(List.of(41L, 42L, 43L), account.getFees().stream()
-				.map(FeeRequestRecommendationEntity::getFeeRequestId).toList());
+				.map(FeeRecommendationEntity::getFeeRequestId).toList());
 		assertEquals(new BigDecimal("12.50"), account.getFees().getFirst().getAmount());
 		assertEquals(FeeStatus.CHARGED, account.getFees().getFirst().getStatus());
 		assertEquals(FeeStatus.WAIVED, account.getFees().get(1).getStatus());

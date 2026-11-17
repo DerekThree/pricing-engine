@@ -5,21 +5,22 @@ import java.util.UUID;
 
 import org.springframework.stereotype.Component;
 
-import com.pricing.engine.ruleEngine.RuleEngineBatch;
+import com.pricing.engine.ruleEngine.RuleEngineAccountBatch;
 
 @Component
 public class AccountMapper {
 
-	public RuleEngineBatch toRuleEngineBatch(UUID batchId, List<AccountEntity> accounts) {
-		return new RuleEngineBatch(batchId, accounts.stream().map(account ->
-				new RuleEngineBatch.Account(
+	public RuleEngineAccountBatch toRuleEngineAccountBatch(
+			UUID batchId, List<AccountEntity> accounts) {
+		return new RuleEngineAccountBatch(batchId, accounts.stream().map(account ->
+				new RuleEngineAccountBatch.Account(
 						account.getAccountNumber(), account.getProductCode(), account.getBranchCode(),
 						account.getPricingDate(),
 						account.getAttributes().stream().map(attribute ->
-								new RuleEngineBatch.AccountAttribute(attribute.getCode(),
+								new RuleEngineAccountBatch.AccountAttribute(attribute.getCode(),
 										attribute.getValue())).toList(),
 						account.getFees().stream().map(fee ->
-								new RuleEngineBatch.FeeRequest(fee.getFeeRequestId(), fee.getCode(),
+								new RuleEngineAccountBatch.FeeRequest(fee.getFeeRequestId(), fee.getCode(),
 										fee.getTransactionAmount())).toList())).toList());
 	}
 }

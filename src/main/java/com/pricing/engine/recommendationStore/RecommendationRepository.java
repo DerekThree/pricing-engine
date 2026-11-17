@@ -7,7 +7,7 @@ import jakarta.persistence.PersistenceContext;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
-import com.pricing.engine.ruleEngine.RuleEngineBatchResult;
+import com.pricing.engine.ruleEngine.RuleEngineReocmmendationBatch;
 
 @Repository
 public class RecommendationRepository {
@@ -45,7 +45,7 @@ public class RecommendationRepository {
 	}
 
 	@Transactional(transactionManager = "recommendationTransactionManager")
-	public void save(RuleEngineBatchResult result) {
+	public void save(RuleEngineReocmmendationBatch result) {
 		entityManager.persist(mapper.toEntity(result));
 	}
 }

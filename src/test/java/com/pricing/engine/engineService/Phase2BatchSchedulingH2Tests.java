@@ -24,7 +24,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicReference;
 import com.pricing.engine.accountStore.AccountRepository;
-import com.pricing.engine.ruleEngine.RuleEngineBatch;
+import com.pricing.engine.ruleEngine.RuleEngineAccountBatch;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -211,7 +211,7 @@ class Phase2BatchSchedulingH2Tests extends H2Fixture {
 		var releaseHeld = new CountDownLatch(1);
 		var releaseFailure = new CountDownLatch(1);
 		doAnswer(call -> {
-			UUID batchId = call.getArgument(0, RuleEngineBatch.class).batchId();
+			UUID batchId = call.getArgument(0, RuleEngineAccountBatch.class).batchId();
 			if (batchId.equals(held)) {
 				heldEntered.countDown();
 				assertTrue(releaseHeld.await(5, TimeUnit.SECONDS));
@@ -221,7 +221,7 @@ class Phase2BatchSchedulingH2Tests extends H2Fixture {
 				throw new IllegalArgumentException("Invalid rule");
 			}
 			return call.callRealMethod();
-		}).when(ruleEngine).price(any(RuleEngineBatch.class));
+		}).when(ruleEngine).price(any(RuleEngineAccountBatch.class));
 
 		try (var work = Executors.newVirtualThreadPerTaskExecutor()) {
 			var processing = work.submit(worker::processPendingAccounts);

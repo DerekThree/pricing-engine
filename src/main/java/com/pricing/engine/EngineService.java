@@ -15,8 +15,8 @@ import com.pricing.engine.pricingStore.PricingRepository;
 import com.pricing.engine.recommendationStore.RecommendationRepository;
 import com.pricing.engine.ruleEngine.PricingAccessException;
 import com.pricing.engine.ruleEngine.RuleEngine;
-import com.pricing.engine.ruleEngine.RuleEngineBatch;
-import com.pricing.engine.ruleEngine.RuleEngineBatchResult;
+import com.pricing.engine.ruleEngine.RuleEngineAccountBatch;
+import com.pricing.engine.ruleEngine.RuleEngineReocmmendationBatch;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -207,12 +207,12 @@ public class EngineService implements SmartInitializingSingleton {
 
 		private boolean processNextBatch() {
 			try {
-				RuleEngineBatch batch = retryAccountOperation(this::claimAndLoad);
+				RuleEngineAccountBatch batch = retryAccountOperation(this::claimAndLoad);
 				if (batchId == null) {
 					return false;
 				}
 				if (batch != null) {
-					RuleEngineBatchResult result;
+					RuleEngineReocmmendationBatch result;
 					try {
 						result = retryDatabaseOperation(() -> ruleEngine.price(batch),
 								pricingRepository::checkConnection);
@@ -233,7 +233,7 @@ public class EngineService implements SmartInitializingSingleton {
 			}
 		}
 
-		private RuleEngineBatch claimAndLoad() {
+		private RuleEngineAccountBatch claimAndLoad() {
 			processingLock.lock();
 			batchId = accountRepository.claimNextBatchId();
 			if (batchId == null) {
@@ -275,7 +275,7 @@ public class EngineService implements SmartInitializingSingleton {
 			}
 		}
 
-		private void storeResult(RuleEngineBatchResult result) {
+		private void storeResult(RuleEngineReocmmendationBatch result) {
 			retryDatabaseOperation(() -> {
 				try {
 					recommendationRepository.save(result);

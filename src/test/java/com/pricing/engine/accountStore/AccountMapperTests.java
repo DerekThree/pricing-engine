@@ -29,7 +29,7 @@ class AccountMapperTests {
 				.accountNumber("A2").productCode("CHECKING").branchCode("NY")
 				.pricingDate(LocalDate.of(2026, 2, 1)).build();
 
-		var result = new AccountMapper().toRuleEngineBatch(batchId, List.of(first, second));
+		var result = new AccountMapper().toRuleEngineAccountBatch(batchId, List.of(first, second));
 
 		assertEquals(batchId, result.batchId());
 		assertEquals(LocalDate.of(2026, 1, 1), result.accounts().getFirst().pricingDate());

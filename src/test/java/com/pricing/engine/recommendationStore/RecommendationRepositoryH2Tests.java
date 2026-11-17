@@ -9,8 +9,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import com.pricing.engine.recommendationStore.RecommendationRepository;
-import com.pricing.engine.ruleEngine.RuleEngineBatchResult;
-import com.pricing.engine.ruleEngine.RuleEngineBatchResult.*;
+import com.pricing.engine.ruleEngine.RuleEngineReocmmendationBatch;
+import com.pricing.engine.ruleEngine.RuleEngineReocmmendationBatch.*;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataIntegrityViolationException;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -35,7 +35,7 @@ class RecommendationRepositoryH2Tests extends H2Fixture {
 					ready.countDown();
 					assertTrue(start.await(5, TimeUnit.SECONDS));
 					try {
-						repository.save(new RuleEngineBatchResult(batchId, List.of(
+						repository.save(new RuleEngineReocmmendationBatch(batchId, List.of(
 								new AccountResult("A1", AccountStatus.OK, plan, List.of(
 										new FeeResult(42L, FeeStatus.CHARGED,
 												new BigDecimal("2.50"), null))))));

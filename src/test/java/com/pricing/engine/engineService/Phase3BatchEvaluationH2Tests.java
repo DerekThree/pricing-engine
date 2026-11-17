@@ -17,8 +17,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import com.pricing.engine.accountStore.AccountRepository;
-import com.pricing.engine.ruleEngine.RuleEngineBatch;
-import com.pricing.engine.ruleEngine.RuleEngineBatchResult;
+import com.pricing.engine.ruleEngine.RuleEngineAccountBatch;
+import com.pricing.engine.ruleEngine.RuleEngineReocmmendationBatch;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -77,7 +77,7 @@ class Phase3BatchEvaluationH2Tests extends H2Fixture {
 		var failure = new IllegalStateException(message, new IllegalArgumentException("Bad rule"));
 		doAnswer(call -> {
 			throw failure;
-		}).when(ruleEngine).price(any(RuleEngineBatch.class));
+		}).when(ruleEngine).price(any(RuleEngineAccountBatch.class));
 
 		service.processPendingAccounts();
 
@@ -185,13 +185,13 @@ class Phase3BatchEvaluationH2Tests extends H2Fixture {
 			}).when(retainedRepository).checkConnection();
 		}
 		doAnswer(call -> {
-			if (!((RuleEngineBatch) call.getArgument(0)).batchId().equals(batch)) {
+			if (!((RuleEngineAccountBatch) call.getArgument(0)).batchId().equals(batch)) {
 				return call.callRealMethod();
 			}
 			owner.set(Thread.currentThread());
 			evaluations.incrementAndGet();
 			throw failure;
-		}).when(ruleEngine).price(any(RuleEngineBatch.class));
+		}).when(ruleEngine).price(any(RuleEngineAccountBatch.class));
 		doAnswer(invocation -> {
 			Connection connection = (Connection) invocation.callRealMethod();
 			return intercept(connection, Connection.class, (method, arguments, proceed) -> {
@@ -267,7 +267,7 @@ class Phase3BatchEvaluationH2Tests extends H2Fixture {
 				} else if (outcome.equals("error")) {
 					accounts.update("update batch_outbox set error = '' where batch_id = ?", batch);
 				} else if (outcome.equals("recommendations") || outcome.equals("completion")) {
-					recommendationRepository.save(new RuleEngineBatchResult(batch, List.of()));
+					recommendationRepository.save(new RuleEngineReocmmendationBatch(batch, List.of()));
 				}
 			} finally {
 				unavailable.set(false);

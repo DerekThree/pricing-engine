@@ -20,10 +20,10 @@ import javax.sql.DataSource;
 
 import com.pricing.engine.ruleEngine.Pricing;
 import com.pricing.engine.ruleEngine.RuleEngine;
-import com.pricing.engine.ruleEngine.RuleEngineBatch;
-import com.pricing.engine.ruleEngine.RuleEngineBatchResult;
-import com.pricing.engine.ruleEngine.RuleEngineBatch.*;
-import com.pricing.engine.ruleEngine.RuleEngineBatchResult.*;
+import com.pricing.engine.ruleEngine.RuleEngineAccountBatch;
+import com.pricing.engine.ruleEngine.RuleEngineReocmmendationBatch;
+import com.pricing.engine.ruleEngine.RuleEngineAccountBatch.*;
+import com.pricing.engine.ruleEngine.RuleEngineReocmmendationBatch.*;
 
 import jakarta.persistence.EntityManagerFactory;
 import org.hibernate.SessionFactory;
@@ -240,7 +240,7 @@ class PricingRepositoryH2Tests {
 	void additionalRegionMembershipsDoNotAddPricingQueries() {
 		Long branchId = insertBranch();
 		insertRegion(branchId);
-		RuleEngineBatch batch = new RuleEngineBatch(
+		RuleEngineAccountBatch batch = new RuleEngineAccountBatch(
 				UUID.fromString("5fd2879b-7f17-4a05-8fbe-7ebce6958f3b"),
 				List.of(new Account(
 						"ACCOUNT001",
@@ -252,7 +252,7 @@ class PricingRepositoryH2Tests {
 		Statistics statistics = entityManagerFactory.unwrap(SessionFactory.class).getStatistics();
 		statistics.clear();
 
-		RuleEngineBatchResult oneRegionResult = ruleEngine.price(batch);
+		RuleEngineReocmmendationBatch oneRegionResult = ruleEngine.price(batch);
 		long oneRegionQueryCount = statistics.getPrepareStatementCount();
 		Long secondRegionId = insert("""
 				insert into regions (region_code, region_name, updated_on, updated_by)
@@ -266,7 +266,7 @@ class PricingRepositoryH2Tests {
 				secondRegionId);
 		statistics.clear();
 
-		RuleEngineBatchResult twoRegionResult = ruleEngine.price(batch);
+		RuleEngineReocmmendationBatch twoRegionResult = ruleEngine.price(batch);
 
 		assertEquals(AccountStatus.PLAN_NOT_FOUND,
 				oneRegionResult.accounts().getFirst().status());
@@ -290,7 +290,7 @@ class PricingRepositoryH2Tests {
 				LocalDate.of(2026, 8, 31));
 		jdbcTemplate.update("insert into pricing_plan_fees values (?, ?, ?)",
 				pricingPlanId, feeId, new BigDecimal("7.5000"));
-		RuleEngineBatch batch = new RuleEngineBatch(batchId, List.of(new Account(
+		RuleEngineAccountBatch batch = new RuleEngineAccountBatch(batchId, List.of(new Account(
 				"ACCOUNT001",
 				"PROD0001",
 				"BRANCH001",
@@ -304,7 +304,7 @@ class PricingRepositoryH2Tests {
 			RegionReadPause pause = new RegionReadPause();
 			RegionReadPause.active = pause;
 			try {
-				Future<RuleEngineBatchResult> resultFuture = executor.submit(
+				Future<RuleEngineReocmmendationBatch> resultFuture = executor.submit(
 						() -> ruleEngine.price(batch));
 				assertTrue(pause.reached.await(10, TimeUnit.SECONDS),
 						"Pricing data load did not reach the Region phase");
@@ -319,7 +319,7 @@ class PricingRepositoryH2Tests {
 						Integer.class, regionId));
 				pause.resume.countDown();
 
-				RuleEngineBatchResult result = resultFuture.get(10, TimeUnit.SECONDS);
+				RuleEngineReocmmendationBatch result = resultFuture.get(10, TimeUnit.SECONDS);
 
 				assertEquals(AccountStatus.OK, result.accounts().getFirst().status());
 			} finally {

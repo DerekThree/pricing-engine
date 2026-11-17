@@ -8,8 +8,8 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import com.pricing.engine.utils.MockPricing;
 import com.pricing.engine.utils.PostgresFixture;
-import com.pricing.engine.ruleEngine.RuleEngineBatchResult;
-import com.pricing.engine.ruleEngine.RuleEngineBatchResult.*;
+import com.pricing.engine.ruleEngine.RuleEngineReocmmendationBatch;
+import com.pricing.engine.ruleEngine.RuleEngineReocmmendationBatch.*;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataIntegrityViolationException;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -98,7 +98,7 @@ class Phase4PersistencePostgresTests extends PostgresFixture {
 				check (batch_id <> 'b566f38a-0d68-4adb-8a86-84b0d945d645')
 				""");
 		try {
-			RuleEngineBatchResult result = ruleEngine.price(accountRepository.load(batchId));
+			RuleEngineReocmmendationBatch result = ruleEngine.price(accountRepository.load(batchId));
 			assertThrows(DataIntegrityViolationException.class,
 					() -> recommendationRepository.save(result));
 			for (String table : List.of("account_recommendations",
@@ -131,7 +131,7 @@ class Phase4PersistencePostgresTests extends PostgresFixture {
 	@Test
 	void storesAllOutcomeFieldsAndEnforcesTheUniqueRecommendationOutboxKey() {
 		UUID batchId = UUID.randomUUID();
-		var result = new RuleEngineBatchResult(batchId, List.of(
+		var result = new RuleEngineReocmmendationBatch(batchId, List.of(
 				new AccountResult("A1", AccountStatus.OK, "JANPLAN", List.of(
 						new FeeResult(41L, FeeStatus.CHARGED,
 								new BigDecimal("12.50"), null),
