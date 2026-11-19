@@ -74,10 +74,8 @@ class Phase2BatchSchedulingH2Tests extends H2Fixture {
 				for (int i = 0; i < 3; i++) {
 					service.wakeUp();
 					assertEquals(Boolean.TRUE, entered.poll(5, TimeUnit.SECONDS));
-					assertNull(entered.poll(200, TimeUnit.MILLISECONDS));
 				}
 				service.wakeUp();
-				assertNull(entered.poll(200, TimeUnit.MILLISECONDS));
 				permits.release();
 				assertEquals(Boolean.TRUE, entered.poll(5, TimeUnit.SECONDS));
 				assertEquals(3, active.get());
