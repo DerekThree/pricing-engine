@@ -6,6 +6,20 @@ on:
       - Engine CI
     types:
       - completed
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Use start to start the ECS service if it is stopped
+        required: true
+        type: string
+      ci_run_id:
+        description: CI run with the image artifact when the commit image is missing from ECR
+        required: false
+        type: string
+      commit_sha:
+        description: Commit in the requested Docker image
+        required: true
+        type: string
 
 permissions:
   actions: read
@@ -19,61 +33,71 @@ jobs:
   deploy:
     if: >-
       ${{
-        github.event.workflow_run.conclusion == 'success' &&
+        (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' &&
+        inputs.operation == 'start') ||
+        (github.event.workflow_run.conclusion == 'success' &&
         github.event.workflow_run.event == 'push' &&
         github.event.workflow_run.head_branch == 'main' &&
-        github.event.workflow_run.head_repository.full_name == github.repository
+        github.event.workflow_run.head_repository.full_name == github.repository)
       }}
     runs-on: ubuntu-latest
 
     steps:
+      - name: Resolve CI image
+        id: ci_image
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_RUN_ID: ${{ inputs.ci_run_id || github.event.workflow_run.id }}
+          COMMIT_SHA: ${{ inputs.commit_sha || github.event.workflow_run.head_sha }}
+        run: |
+          if [[ ! "$COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Invalid commit SHA."
+            exit 1
+          fi
+          echo "commit_sha=$COMMIT_SHA" >> "$GITHUB_OUTPUT"
+          if [[ -z "$CI_RUN_ID" ]]; then
+            exit 0
+          fi
+          if [[ ! "$CI_RUN_ID" =~ ^[0-9]+$ ]]; then
+            echo "::error::Invalid CI run ID."
+            exit 1
+          fi
+
+          run=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CI_RUN_ID")
+          if ! jq -e --arg repo "$GITHUB_REPOSITORY" --arg sha "$COMMIT_SHA" '
+            .path == ".github/workflows/ci.yml" and
+            .conclusion == "success" and
+            .head_branch == "main" and
+            .head_repository.full_name == $repo and
+            ((.event == "push" and .head_sha == $sha) or .event == "workflow_dispatch")
+          ' <<< "$run" > /dev/null; then
+            echo "::error::Image must come from a successful main CI run in this repository."
+            exit 1
+          fi
+          echo "run_id=$CI_RUN_ID" >> "$GITHUB_OUTPUT"
+
       - name: Authenticate to AWS
         uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::064550674390:role/pricing-backend-github-deploy
           aws-region: us-east-1
 
-      - name: Verify ECS service state
-        id: ecs_state
-        run: |
-          service_json=$(aws ecs describe-services \
-            --cluster pricing-app-cluster \
-            --services pricing-engine-service \
-            --output json)
-
-          if ! jq -e '
-            (.services | length == 1) and
-            (.services[0].status == "ACTIVE") and
-            (
-              (.services[0].desiredCount == 0 and
-               .services[0].runningCount == 0 and
-               .services[0].pendingCount == 0) or
-              (.services[0].desiredCount > 0 and
-               .services[0].runningCount >= .services[0].desiredCount and
-               (.services[0].deployments | length == 1) and
-               .services[0].deployments[0].rolloutState == "COMPLETED")
-            )
-          ' <<< "$service_json" > /dev/null; then
-            echo "::error::ECS service is missing or not ready."
-            exit 1
-          fi
-
-          desired_count=$(jq -r '.services[0].desiredCount' <<< "$service_json")
-          echo "desired_count=$desired_count" >> "$GITHUB_OUTPUT"
-
       - name: Download CI image
+        if: steps.ci_image.outputs.run_id != ''
         uses: actions/download-artifact@v7
         with:
-          name: pricing-engine-image
-          run-id: ${{ github.event.workflow_run.id }}
+          name: pricing-engine-image-${{ steps.ci_image.outputs.commit_sha }}
+          run-id: ${{ steps.ci_image.outputs.run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Load CI image
+        if: steps.ci_image.outputs.run_id != ''
         run: docker load --input pricing-engine-image.tar
 
       - name: Publish CI image to ECR
+        if: steps.ci_image.outputs.run_id != ''
         env:
-          COMMIT_SHA: ${{ github.event.workflow_run.head_sha }}
+          COMMIT_SHA: ${{ steps.ci_image.outputs.commit_sha }}
         run: |
           registry=064550674390.dkr.ecr.us-east-1.amazonaws.com
           image="$registry/pricing-engine"
@@ -82,45 +106,16 @@ jobs:
             docker login --username AWS --password-stdin "$registry"
 
           docker tag pricing-engine:ci "$image:$COMMIT_SHA"
-          docker tag pricing-engine:ci "$image:latest"
-
           docker push "$image:$COMMIT_SHA"
-          docker push "$image:latest"
 
-      - name: Deploy and verify ECS
-        if: steps.ecs_state.outputs.desired_count != '0'
-        run: |
-          deployment_id=$(aws ecs update-service \
-            --cluster pricing-app-cluster \
-            --service pricing-engine-service \
-            --force-new-deployment \
-            --query "service.deployments[?status=='PRIMARY'].id | [0]" \
-            --output text)
-
-          aws ecs wait services-stable \
-            --cluster pricing-app-cluster \
-            --services pricing-engine-service
-
-          active_id=$(aws ecs describe-services \
-            --cluster pricing-app-cluster \
-            --services pricing-engine-service \
-            --query "services[0].deployments[?status=='PRIMARY'].id | [0]" \
-            --output text)
-
-          if [ "$active_id" != "$deployment_id" ]; then
-            echo "::error::New ECS deployment did not succeed. Possible rollback."
-            exit 1
-          fi
-
-      - name: Verify ECR image and ECS task definition
+      - name: Set and verify the ECR latest tag
         env:
-          COMMIT_SHA: ${{ github.event.workflow_run.head_sha }}
+          COMMIT_SHA: ${{ steps.ci_image.outputs.commit_sha }}
         run: |
-          expected=$(aws ecr batch-get-image \
+          image=$(aws ecr batch-get-image \
             --repository-name pricing-engine \
-            --image-ids "imageTag=$COMMIT_SHA" \
-            --query 'images[0].imageId.imageDigest' \
-            --output text)
+            --image-ids "imageTag=$COMMIT_SHA" --output json)
+          expected=$(jq -er '.images[0].imageId.imageDigest' <<< "$image")
 
           latest=$(aws ecr batch-get-image \
             --repository-name pricing-engine \
@@ -128,11 +123,19 @@ jobs:
             --query 'images[0].imageId.imageDigest' \
             --output text)
 
-          if [[ "$expected" != sha256:* || "$latest" != "$expected" ]]; then
+          if [[ "$latest" != "$expected" ]]; then
+            manifest=$(jq -er '.images[0].imageManifest' <<< "$image")
+            latest=$(aws ecr put-image --repository-name pricing-engine \
+              --image-tag latest --image-manifest "$manifest" \
+              --query 'image.imageId.imageDigest' --output text)
+          fi
+          if [[ "$latest" != "$expected" ]]; then
             echo "::error::ECR latest does not match the image published by CI."
             exit 1
           fi
 
+      - name: Verify ECS task definition
+        run: |
           task_definition=$(aws ecs describe-services \
             --cluster pricing-app-cluster \
             --services pricing-engine-service \
@@ -149,14 +152,73 @@ jobs:
             exit 1
           fi
 
-          if [[ "${{ steps.ecs_state.outputs.desired_count }}" == "0" ]]; then
-            echo "ECS is scaled to zero. ECR and ECS configuration verified; runtime checks skipped."
+      - name: Deploy to ECS
+        id: deploy
+        env:
+          OPERATION: ${{ inputs.operation }}
+        run: |
+          desired_count=$(aws ecs describe-services \
+            --cluster pricing-app-cluster --services pricing-engine-service \
+            --query "services[?status=='ACTIVE'].desiredCount | [0]" --output text)
+          if [[ ! "$desired_count" =~ ^[0-9]+$ ]]; then
+            echo "::error::ECS service is missing or inactive."
+            exit 1
+          fi
+
+          scale=()
+          if [[ "$desired_count" == "0" ]]; then
+            if [[ "$OPERATION" != "start" ]]; then
+              echo "Service is stopped. Published the image to ECR."
+              exit 0
+            fi
+            scale=(--desired-count 1)
+          fi
+          deployment_id=$(aws ecs update-service \
+            --cluster pricing-app-cluster --service pricing-engine-service \
+            --force-new-deployment "${scale[@]}" \
+            --query "service.deployments[?status=='PRIMARY'].id | [0]" --output text)
+          if [[ "$deployment_id" != ecs-svc/* ]]; then
+            echo "::error::ECS did not return a deployment ID."
+            exit 1
+          fi
+          echo "id=$deployment_id" >> "$GITHUB_OUTPUT"
+
+      - name: Share Engine deployment ID with Start
+        if: inputs.operation == 'start'
+        env:
+          DEPLOYMENT_ID: ${{ steps.deploy.outputs.id }}
+        run: printf '%s\n' "$DEPLOYMENT_ID" > "$RUNNER_TEMP/engine-deployment-id.txt"
+
+      - name: Upload Engine deployment ID
+        if: inputs.operation == 'start'
+        uses: actions/upload-artifact@v7
+        with:
+          name: engine-deployment-id
+          path: ${{ runner.temp }}/engine-deployment-id.txt
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Wait for ECS deployment
+        if: github.event_name == 'workflow_run' && steps.deploy.outputs.id != ''
+        env:
+          DEPLOYMENT_ID: ${{ steps.deploy.outputs.id }}
+        run: |
+          aws ecs wait services-stable \
+            --cluster pricing-app-cluster --services pricing-engine-service
+
+          active_id=$(aws ecs describe-services \
+            --cluster pricing-app-cluster --services pricing-engine-service \
+            --query "services[0].deployments[?status=='PRIMARY'].id | [0]" --output text)
+
+          if [[ "$active_id" != "$DEPLOYMENT_ID" ]]; then
+            echo "::error::New ECS deployment did not succeed. Possible rollback."
+            exit 1
           fi
 
       - name: Verify running task image
-        if: steps.ecs_state.outputs.desired_count != '0'
+        if: github.event_name == 'workflow_run' && steps.deploy.outputs.id != ''
         env:
-          COMMIT_SHA: ${{ github.event.workflow_run.head_sha }}
+          COMMIT_SHA: ${{ steps.ci_image.outputs.commit_sha }}
         run: |
           expected=$(aws ecr batch-get-image \
             --repository-name pricing-engine \
